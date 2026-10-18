@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Environment files (passwords, keys)
+.env
+.env.*
+!.env.example
+
+# Secrets (Google key, Aiven certificate, DB dumps)
+secrets/
+*.pem
+*-service-account*.json
+
+# Build output
+dist/
+build/
+coverage/
+
+# Test reports
+playwright-report/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

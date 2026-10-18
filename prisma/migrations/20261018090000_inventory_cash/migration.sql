@@ -1,0 +1,22 @@
+-- AlterTable
+ALTER TABLE `cash_closings` ADD COLUMN `cashCollectedPaisa` BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN `cashPaidOutPaisa` BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN `totalCollectedPaisa` BIGINT NOT NULL DEFAULT 0;
+
+-- AlterTable
+ALTER TABLE `damage_reports` ADD COLUMN `approverRole` ENUM('LEAD_MEMBER', 'RECEPTIONIST', 'DOCTOR', 'ASSISTANT', 'OFFICE_BOY', 'MANAGER', 'MD', 'MARKETING_DIRECTOR', 'MARKETING_LEAD') NOT NULL DEFAULT 'MANAGER',
+    ADD COLUMN `decisionReason` TEXT NULL;
+
+-- AlterTable
+ALTER TABLE `stock_batches` ADD COLUMN `expiryAlertedAt` DATETIME(3) NULL,
+    ADD COLUMN `statusReason` TEXT NULL;
+
+-- AlterTable
+ALTER TABLE `stock_demands` ADD COLUMN `approverRole` ENUM('LEAD_MEMBER', 'RECEPTIONIST', 'DOCTOR', 'ASSISTANT', 'OFFICE_BOY', 'MANAGER', 'MD', 'MARKETING_DIRECTOR', 'MARKETING_LEAD') NULL,
+    ADD COLUMN `closedAt` DATETIME(3) NULL,
+    ADD COLUMN `closedById` VARCHAR(191) NULL,
+    ADD COLUMN `forwardedById` VARCHAR(191) NULL,
+    ADD COLUMN `forwardedToMdAt` DATETIME(3) NULL;
+
+-- AlterTable
+ALTER TABLE `stock_items` ADD COLUMN `lowStockAlertedAt` DATETIME(3) NULL;

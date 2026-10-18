@@ -1,0 +1,1696 @@
+// The Vertex Health Command Center — data model (spec §5).
+// Conventions: UTC DateTime everywhere; clinic-local calendar dates use @db.Date and
+// minutes-from-midnight Ints (Asia/Karachi). Money = BigInt paisa. No hard deletes of
+// clinical / financial / audit / history rows (enforced by services + DB triggers).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  LEAD_MEMBER
+  RECEPTIONIST
+  DOCTOR
+  ASSISTANT
+  OFFICE_BOY
+  MANAGER
+  MD
+  MARKETING_DIRECTOR // Hamza Zafar — NOT Dr Hamza Rasool
+  MARKETING_LEAD // Muaz Tahir
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  FOLLOW_UP_DUE
+  BOOKED
+  NOT_INTERESTED
+  UNREACHABLE
+}
+
+enum LeadActivityChannel {
+  CALL
+  WHATSAPP
+  NOTE
+}
+
+enum LeadActivityResult {
+  CONNECTED
+  NO_ANSWER
+  BUSY
+  WRONG_NUMBER
+  SWITCHED_OFF
+  MESSAGE_SENT
+  REPLIED
+  INTERESTED
+  NOT_INTERESTED
+  CALL_BACK_LATER
+  BOOKED
+}
+
+enum AppointmentType {
+  CONSULTATION
+  PROCEDURE
+}
+
+enum AppointmentStatus {
+  DRAFT
+  CONFIRMED
+  CHECKED_IN
+  WAITING
+  WITH_DOCTOR
+  RECEPTION
+  PROCEDURE
+  DONE
+  CANCELLED
+  RESCHEDULED
+}
+
+enum AppointmentSource {
+  LEAD
+  RECEPTION
+  MANAGER
+  DOCTOR_PLAN
+}
+
+enum RoomKind {
+  CONSULT
+  PROCEDURE
+}
+
+enum ReservationStatus {
+  ACTIVE
+  AWAITING_CLEAN // procedure finished, room still occupied until clean evidence
+  RELEASED
+  CANCELLED
+}
+
+enum AvailabilityKind {
+  LEAVE
+  ABSENT
+  ALTERNATE_HOURS
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+  CANCELLED
+}
+
+enum RequestStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  RETURNED_FOR_CORRECTION
+  IN_PROGRESS
+  RESOLVED
+  NEED_DETAILS
+  COMPLETED
+  CANCELLED
+}
+
+enum WorkflowTaskType {
+  RECEPTION_COLLECTION
+  RECEPTION_UPCOMING_PROCEDURE
+  MANAGER_STOCK_CHECK
+  MANAGER_ROOM_VERIFICATION
+  MANAGER_LEAVE_IMPACT
+  MANAGER_PATIENT_FOLLOWUP
+  MANAGER_ASSIGNMENT_MISSING
+  MANAGER_MESSAGE_FAILURE
+  DOCTOR_AFTERCARE
+  ROOM_OPENING
+  ROOM_CLOSING
+}
+
+enum ProcedureStep {
+  ACCEPT
+  CONSENT
+  BEFORE_PHOTO
+  START
+  FINISH
+  AFTER_PHOTO
+  ITEMS_USED
+  SEND_TO_RECEPTION
+  ROOM_CLEAN
+  DONE
+}
+
+enum ChecklistKind {
+  OPENING
+  CLOSING
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  RETURNED
+  ESCALATED
+}
+
+enum OfficeRoundKind {
+  FIRST_CHECK
+  ROUND
+  FINAL
+}
+
+enum LeaveKind {
+  LEAVE
+  EARLY_LEAVE
+}
+
+enum ComplaintSource {
+  STAFF
+  LEAD
+  PATIENT
+  MANAGER
+}
+
+enum AdRequestKind {
+  RADIUS_CHANGE
+  EDIT_AD
+  NEW_AD
+  ISSUE
+}
+
+enum ApprovalType {
+  STOCK_DEMAND
+  HISTORY_ACCESS
+  ALTERNATE_AVAILABILITY
+  ASSISTANT_REPLACEMENT
+  RESCHEDULE
+  DAMAGE_WRITE_OFF
+}
+
+enum StockTxnType {
+  PURCHASE
+  USAGE
+  RETURN_TO_SUPPLIER
+  DAMAGE
+  ADJUSTMENT
+}
+
+enum BatchStatus {
+  AVAILABLE
+  QUARANTINED
+  EXPIRED
+  DEPLETED
+}
+
+enum DemandStatus {
+  DRAFT
+  PENDING_MANAGER
+  PENDING_MD
+  APPROVED
+  REJECTED
+  RETURNED_FOR_CORRECTION
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_ONLINE
+  CHEQUE
+}
+
+enum LedgerAccount {
+  CASH_IN_HAND
+  BANK
+  SUPPLIER_PAYABLE
+  PATIENT_RECEIVABLE
+}
+
+enum InvoiceStatus {
+  OPEN
+  CLOSED
+  VOID
+}
+
+enum PlanItemStatus {
+  PLANNED
+  SCHEDULED
+  IN_PROGRESS
+  DONE
+  CANCELLED
+  SUPERSEDED
+}
+
+enum MessageChannel {
+  WHATSAPP
+  SMS
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+enum CallbackStatus {
+  PENDING
+  DUE
+  COMPLETED
+  SUPERSEDED
+  CANCELLED
+}
+
+enum UploadRoute {
+  consentForm
+  prescriptionPhoto
+  beforePhoto
+  afterPhoto
+  itemsUsedEvidence
+  roomCleanPhoto
+  roomChecklistPhoto
+  machineIssuePhoto
+  damagePhoto
+  adCreative
+  requestAttachment
+  complaintAttachment
+  vendorInvoice
+}
+
+// ───────────────────────────── Identity & auth ─────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  displayName  String
+  email        String?  @unique
+  phone        String?  @unique // normalizePhone()
+  memberCode   String?  @unique // Member ID login (Lead members / staff IDs)
+  passwordHash String
+  role         Role
+  active       Boolean  @default(true)
+  tokenVersion Int      @default(0) // bump to invalidate all access tokens
+  title        String? // e.g. "Marketing & Development Director / Co-Founder"
+  isDemo       Boolean  @default(false)
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  createdBy     User?                @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers  User[]               @relation("UserCreatedBy")
+  sessions      Session[]
+  resetTokens   PasswordResetToken[]
+  doctorProfile DoctorProfile?
+  leadProfile   LeadMemberProfile?
+
+  @@index([role, active])
+  @@map("users")
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String    @unique
+  tokenVersion     Int
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  replacedById     String?
+  userAgent        String?   @db.VarChar(512)
+  ip               String?
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model LeadMemberProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  notes       String?  @db.Text
+  createdById String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("lead_member_profiles")
+}
+
+model DoctorProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  specialty String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("doctor_profiles")
+}
+
+// ───────────────────────────── Leads ─────────────────────────────
+
+model MetaSheet {
+  id          String   @id @default(cuid())
+  externalId  String   @unique // Meta sheet / form identifier
+  title       String
+  campaign    String
+  active      Boolean  @default(true)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Google Sheets lead sync (Phase 9b, D-039). Credentials live only in backend env (GOOGLE_SERVICE_ACCOUNT_JSON).
+  googleSheetId       String? // spreadsheet ID from the sheet URL
+  tabName             String?
+  columnMap           Json? // { name, phone, id?, extra?: string[] } — header names in row 1
+  syncCursorRow       Int              @default(1) // last sheet row read (1 = header row)
+  lastSyncAttemptAt   DateTime?
+  lastSyncAt          DateTime? // last finished run (success or failure)
+  lastSyncStatus      SheetSyncStatus?
+  lastSyncError       String?          @db.Text
+  consecutiveFailures Int              @default(0)
+  syncLeaseUntil      DateTime? // one sync per sheet at a time across API + workers
+  syncLeaseOwner      String?
+
+  assignments SheetAssignment[]
+  leads       Lead[]
+  syncRuns    SheetSyncRun[]
+
+  @@unique([googleSheetId, tabName])
+  @@map("meta_sheets")
+}
+
+enum SheetSyncStatus {
+  SUCCESS
+  FAILED
+}
+
+enum SheetSyncTrigger {
+  SCHEDULED
+  MANUAL
+}
+
+/**
+ * One row per sync run (sync log). Never updated after insert.
+ */
+model SheetSyncRun {
+  id              String           @id @default(cuid())
+  sheetId         String
+  trigger         SheetSyncTrigger
+  actorId         String?
+  workerId        String?
+  startedAt       DateTime
+  finishedAt      DateTime         @default(now())
+  status          SheetSyncStatus
+  fromRow         Int?
+  toRow           Int?
+  rowsRead        Int              @default(0)
+  imported        Int              @default(0)
+  alreadyImported Int              @default(0)
+  duplicatePhones Int              @default(0)
+  skipped         Int              @default(0)
+  error           String?          @db.Text
+  details         Json? // skipped rows: [{ row, reason }] (first 20)
+
+  sheet MetaSheet @relation(fields: [sheetId], references: [id])
+
+  @@index([sheetId, startedAt])
+  @@map("sheet_sync_runs")
+}
+
+model SheetAssignment {
+  id             String    @id @default(cuid())
+  sheetId        String
+  memberId       String
+  assignedById   String
+  assignedAt     DateTime  @default(now())
+  unassignedAt   DateTime?
+  unassignedById String?
+
+  sheet MetaSheet @relation(fields: [sheetId], references: [id])
+
+  @@index([memberId, unassignedAt])
+  @@index([sheetId, unassignedAt])
+  @@map("sheet_assignments")
+}
+
+model Lead {
+  id               String     @id @default(cuid())
+  sheetId          String
+  assignedMemberId String
+  name             String
+  phone            String // normalized
+  phoneRaw         String
+  remarks          String?    @db.Text
+  status           LeadStatus @default(NEW)
+  nextContactAt    DateTime?
+  lastContactAt    DateTime?
+  outcome          String?
+  duplicateOfId    String?
+  externalRowId    String?
+  sheetRowNumber   Int? // row in the Google Sheet it was imported from
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  sheet      MetaSheet      @relation(fields: [sheetId], references: [id])
+  activities LeadActivity[]
+  callbacks  LeadCallback[]
+
+  @@unique([sheetId, externalRowId])
+  @@index([assignedMemberId, status])
+  @@index([phone])
+  @@map("leads")
+}
+
+model LeadActivity {
+  id         String              @id @default(cuid())
+  leadId     String
+  actorId    String
+  channel    LeadActivityChannel
+  result     LeadActivityResult?
+  successful Boolean             @default(false)
+  remarks    String?             @db.Text
+  createdAt  DateTime            @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("lead_activities")
+}
+
+model LeadCallback {
+  id          String         @id @default(cuid())
+  leadId      String
+  memberId    String
+  dueAt       DateTime
+  status      CallbackStatus @default(PENDING)
+  remindedAt  DateTime? // in-app reminder created exactly once
+  completedAt DateTime?
+  createdById String
+  createdAt   DateTime       @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([status, dueAt])
+  @@index([memberId, status])
+  @@map("lead_callbacks")
+}
+
+// ───────────────────────────── Patients & scheduling ─────────────────────────────
+
+model Patient {
+  id               String    @id @default(cuid())
+  name             String
+  phone            String // normalized
+  phoneSlot        Int       @default(0) // >0 only when staff confirmed a distinct patient sharing a phone
+  ageYears         Int?
+  gender           String?
+  contactConsent   Boolean   @default(false)
+  whatsappConsent  Boolean   @default(false)
+  whatsappOptOutAt DateTime?
+  mergedIntoId     String?
+  createdById      String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  appointments Appointment[]
+
+  @@unique([phone, phoneSlot])
+  @@map("patients")
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  code      String   @unique // C01..C03, P01..P03
+  name      String
+  kind      RoomKind
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations RoomReservation[]
+
+  @@map("rooms")
+}
+
+model Service {
+  id                String          @id @default(cuid())
+  name              String          @unique
+  type              AppointmentType
+  durationMin       Int? // overrides scheduling.*DurationMin setting
+  defaultPricePaisa BigInt?
+  active            Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+
+  @@map("services")
+}
+
+model DoctorSchedule {
+  id            String    @id @default(cuid())
+  doctorId      String
+  weekday       Int // ISO 1=Mon..7=Sun, clinic timezone
+  startMinute   Int
+  endMinute     Int
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  active        Boolean   @default(true)
+  createdById   String
+  createdAt     DateTime  @default(now())
+
+  @@index([doctorId, weekday])
+  @@map("doctor_schedules")
+}
+
+model DoctorAvailabilityException {
+  id               String           @id @default(cuid())
+  doctorId         String
+  kind             AvailabilityKind
+  date             DateTime         @db.Date // clinic-local date
+  startMinute      Int? // null = full day
+  endMinute        Int?
+  reason           String?          @db.Text
+  // LEAVE/ABSENT: APPROVED on doctor confirm (blocks immediately). ALTERNATE_HOURS: PENDING until Manager approves.
+  status           RequestStatus    @default(PENDING)
+  requestedById    String
+  decidedById      String?
+  decidedAt        DateTime?
+  decisionReason   String?          @db.Text
+  impactResolvedAt DateTime?
+  createdAt        DateTime         @default(now())
+
+  @@index([doctorId, date, status])
+  @@map("doctor_availability_exceptions")
+}
+
+model Appointment {
+  id                  String            @id @default(cuid())
+  patientId           String
+  doctorId            String
+  type                AppointmentType
+  serviceId           String?
+  reason              String?           @db.Text
+  startAt             DateTime
+  endAt               DateTime
+  roomId              String?
+  status              AppointmentStatus @default(CONFIRMED)
+  source              AppointmentSource
+  createdById         String
+  // Immutable lead attribution (spec §8)
+  leadId              String?
+  leadMemberId        String?
+  sheetId             String?
+  treatmentPlanItemId String?           @unique
+  rescheduledFromId   String?           @unique
+  cancelledAt         DateTime?
+  cancelledById       String?
+  cancelReason        String?           @db.Text
+  checkedInAt         DateTime?
+  checkedInById       String?
+  acceptedAt          DateTime? // consultation timer start
+  sentToReceptionAt   DateTime?
+  doneAt              DateTime?
+  hiddenFromQueueAt   DateTime?
+  idempotencyKey      String?           @unique
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  patient      Patient                    @relation(fields: [patientId], references: [id])
+  history      AppointmentStatusHistory[]
+  reservations RoomReservation[]
+  vitals       Vitals[]
+
+  @@index([doctorId, startAt])
+  @@index([roomId, startAt])
+  @@index([status, startAt])
+  @@index([leadMemberId, startAt])
+  @@map("appointments")
+}
+
+model AppointmentStatusHistory {
+  id            String             @id @default(cuid())
+  appointmentId String
+  fromStatus    AppointmentStatus?
+  toStatus      AppointmentStatus
+  actorId       String?
+  reason        String?            @db.Text
+  createdAt     DateTime           @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+
+  @@index([appointmentId, createdAt])
+  @@map("appointment_status_history")
+}
+
+model RescheduleRequest {
+  id               String        @id @default(cuid())
+  appointmentId    String
+  requestedById    String
+  requestedStartAt DateTime?
+  reason           String        @db.Text
+  status           RequestStatus @default(PENDING)
+  patientConfirmed Boolean       @default(false)
+  doctorConfirmed  Boolean       @default(false)
+  decidedById      String?
+  decidedAt        DateTime?
+  decisionReason   String?       @db.Text
+  newAppointmentId String?
+  createdAt        DateTime      @default(now())
+
+  @@index([status])
+  @@map("reschedule_requests")
+}
+
+model RescheduleHistory {
+  id               String   @id @default(cuid())
+  oldAppointmentId String
+  newAppointmentId String
+  oldStartAt       DateTime
+  newStartAt       DateTime
+  oldRoomId        String?
+  newRoomId        String?
+  requestedById    String
+  approvedById     String?
+  reason           String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  @@index([oldAppointmentId])
+  @@map("reschedule_history")
+}
+
+model RoomReservation {
+  id              String            @id @default(cuid())
+  roomId          String
+  appointmentId   String?
+  procedureTaskId String?
+  startAt         DateTime
+  endAt           DateTime
+  status          ReservationStatus @default(ACTIVE)
+  releasedAt      DateTime?
+  createdAt       DateTime          @default(now())
+
+  room        Room         @relation(fields: [roomId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+
+  @@index([roomId, status, startAt])
+  @@map("room_reservations")
+}
+
+model Vitals {
+  id            String   @id @default(cuid())
+  appointmentId String
+  bpSystolic    Int?
+  bpDiastolic   Int?
+  glucoseMgDl   Int?
+  weightGrams   Int?
+  heightMm      Int?
+  skipped       Boolean  @default(false)
+  skipReason    String?
+  enteredById   String
+  createdAt     DateTime @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+
+  @@index([appointmentId])
+  @@map("vitals")
+}
+
+// ───────────────────────────── Treatment plans & money ─────────────────────────────
+
+model TreatmentPlan {
+  id               String   @id @default(cuid())
+  patientId        String
+  doctorId         String
+  appointmentId    String   @unique // originating consultation
+  currentVersionNo Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  versions TreatmentPlanVersion[]
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@map("treatment_plans")
+}
+
+/// Immutable once created (DB trigger blocks UPDATE/DELETE).
+model TreatmentPlanVersion {
+  id                        String   @id @default(cuid())
+  planId                    String
+  versionNo                 Int
+  consultationReason        String   @db.Text
+  consultationFeePaisa      BigInt
+  consultationFeeWaived     Boolean  @default(false)
+  consultationDiscountPaisa BigInt   @default(0)
+  itemsSubtotalPaisa        BigInt
+  itemsDiscountPaisa        BigInt
+  totalDiscountPaisa        BigInt // extra plan-level discount
+  grandTotalPaisa           BigInt
+  advanceRequestedPaisa     BigInt
+  balancePaisa              BigInt
+  installmentCount          Int
+  createdById               String
+  createdAt                 DateTime @default(now())
+
+  plan         TreatmentPlan       @relation(fields: [planId], references: [id])
+  items        TreatmentPlanItem[]
+  installments Installment[]
+
+  @@unique([planId, versionNo])
+  @@map("treatment_plan_versions")
+}
+
+model TreatmentPlanItem {
+  id             String         @id @default(cuid())
+  versionId      String
+  sessionNumber  Int
+  serviceId      String?
+  procedureName  String
+  sameDay        Boolean
+  scheduledStart DateTime
+  scheduledEnd   DateTime
+  roomId         String?
+  pricePaisa     BigInt
+  discountPaisa  BigInt         @default(0)
+  status         PlanItemStatus @default(PLANNED) // operational, the only mutable column
+  createdAt      DateTime       @default(now())
+
+  version TreatmentPlanVersion @relation(fields: [versionId], references: [id])
+
+  @@unique([versionId, sessionNumber])
+  @@index([status, scheduledStart])
+  @@map("treatment_plan_items")
+}
+
+model Installment {
+  id          String   @id @default(cuid())
+  versionId   String
+  seq         Int
+  dueDate     DateTime @db.Date
+  amountPaisa BigInt
+
+  version TreatmentPlanVersion @relation(fields: [versionId], references: [id])
+
+  @@unique([versionId, seq])
+  @@map("installments")
+}
+
+model Invoice {
+  id                       String        @id @default(cuid())
+  number                   String        @unique
+  patientId                String
+  appointmentId            String        @unique
+  planVersionId            String?
+  status                   InvoiceStatus @default(OPEN)
+  subtotalPaisa            BigInt        @default(0)
+  discountPaisa            BigInt        @default(0)
+  totalPaisa               BigInt        @default(0)
+  paidPaisa                BigInt        @default(0)
+  balancePaisa             BigInt        @default(0)
+  prescriptionAttachmentId String?
+  closedAt                 DateTime?
+  closedById               String?
+  createdById              String
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  lines    InvoiceLine[]
+  payments Payment[]
+
+  @@index([status, createdAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id             String  @id @default(cuid())
+  invoiceId      String
+  description    String
+  planItemId     String?
+  quantity       Int     @default(1)
+  unitPricePaisa BigInt
+  discountPaisa  BigInt  @default(0)
+  lineTotalPaisa BigInt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("invoice_lines")
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  receiptNo      String        @unique
+  invoiceId      String
+  amountPaisa    BigInt
+  method         PaymentMethod
+  reference      String?
+  bankAccountId  String?
+  cashierId      String
+  idempotencyKey String        @unique
+  receivedAt     DateTime      @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([receivedAt])
+  @@map("payments")
+}
+
+model BankAccount {
+  id        String   @id @default(cuid())
+  name      String
+  bankName  String
+  accountNo String // masked display handled in API
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("bank_accounts")
+}
+
+/// Double-entry-lite ledger. Balance of an account = SUM(amountPaisa) (signed).
+model LedgerEntry {
+  id            String        @id @default(cuid())
+  account       LedgerAccount
+  bankAccountId String?
+  vendorId      String?
+  amountPaisa   BigInt // + increases the account balance, - decreases
+  refType       String
+  refId         String
+  memo          String?
+  actorId       String
+  createdAt     DateTime      @default(now())
+
+  @@index([account, createdAt])
+  @@index([vendorId])
+  @@index([bankAccountId])
+  @@map("ledger_entries")
+}
+
+model CashClosing {
+  id                  String   @id @default(cuid())
+  date                DateTime @unique @db.Date
+  expectedCashPaisa   BigInt
+  countedCashPaisa    BigInt
+  variancePaisa       BigInt
+  cardPaisa           BigInt
+  bankPaisa           BigInt
+  chequePaisa         BigInt
+  discountsPaisa      BigInt
+  cashCollectedPaisa  BigInt   @default(0)
+  cashPaidOutPaisa    BigInt   @default(0)
+  totalCollectedPaisa BigInt   @default(0)
+  notes               String?  @db.Text
+  cashierId           String?
+  managerId           String
+  signedOffAt         DateTime @default(now())
+
+  @@map("cash_closings")
+}
+
+// ───────────────────────────── Tasks, procedures, rooms ─────────────────────────────
+
+model WorkflowTask {
+  id             String           @id @default(cuid())
+  type           WorkflowTaskType
+  title          String
+  patientId      String?
+  appointmentId  String?
+  planItemId     String?
+  roomId         String?
+  assignedRole   Role
+  assignedUserId String?
+  dueAt          DateTime?
+  currentStep    String?
+  status         TaskStatus       @default(PENDING)
+  payload        Json?
+  idempotencyKey String?          @unique
+  completedAt    DateTime?
+  completedById  String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([assignedRole, status])
+  @@index([assignedUserId, status])
+  @@map("workflow_tasks")
+}
+
+model ProcedureTask {
+  id                      String        @id @default(cuid())
+  planItemId              String        @unique
+  appointmentId           String?
+  patientId               String
+  doctorId                String
+  roomId                  String?
+  assistantId             String?
+  status                  TaskStatus    @default(PENDING)
+  currentStep             ProcedureStep @default(ACCEPT)
+  assignedAt              DateTime?
+  acceptedAt              DateTime?
+  consentAttachmentId     String?
+  consentAt               DateTime?
+  beforePhotoAttachmentId String?
+  beforePhotoSkipped      Boolean       @default(false)
+  beforePhotoSkipReason   String?
+  startedAt               DateTime?
+  endedAt                 DateTime?
+  afterPhotoAttachmentId  String?
+  afterPhotoSkipped       Boolean       @default(false)
+  afterPhotoSkipReason    String?
+  itemsUsedAt             DateTime?
+  /// Patient released back to Reception (before room clean, D-034). Auto = sent by the safety-net watcher.
+  sentToReceptionAt       DateTime?
+  sentToReceptionAuto     Boolean       @default(false)
+  cleanAttachmentId       String?
+  cleanedAt               DateTime?
+  consentAlertAt          DateTime?
+  cleanAlertAt            DateTime?
+  /// Procedure-day release (spec §19): created by the worker on the session date, before Reception assigns
+  /// the Assistant (assistantId stays null until then).
+  releasedAt              DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  assignments ProcedureTaskAssignment[]
+
+  @@index([assistantId, status])
+  @@index([status, currentStep])
+  @@map("procedure_tasks")
+}
+
+model ProcedureTaskAssignment {
+  id              String         @id @default(cuid())
+  procedureTaskId String
+  assistantId     String
+  assignedById    String
+  reason          String? // e.g. emergency replacement
+  resumedAtStep   ProcedureStep?
+  startedAt       DateTime       @default(now())
+  endedAt         DateTime?
+
+  procedureTask ProcedureTask @relation(fields: [procedureTaskId], references: [id])
+
+  @@index([procedureTaskId])
+  @@map("procedure_task_assignments")
+}
+
+model RoomAssignment {
+  id           String    @id @default(cuid())
+  assistantId  String
+  roomId       String
+  date         DateTime  @db.Date
+  assignedById String
+  acceptedAt   DateTime?
+  unassignedAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  reports RoomChecklistReport[]
+
+  @@index([assistantId, date])
+  @@index([roomId, date])
+  @@map("room_assignments")
+}
+
+/// Immutable once submitted (DB trigger). Verification lives in ReportVerification.
+model RoomChecklistReport {
+  id            String        @id @default(cuid())
+  assignmentId  String
+  roomId        String
+  assistantId   String
+  kind          ChecklistKind
+  machineOk     Boolean
+  machineIssue  String?       @db.Text
+  roomNeat      Boolean
+  disinfected   Boolean
+  stockOk       Boolean
+  stockNotes    String?       @db.Text
+  demandSkipped Boolean       @default(false)
+  attachmentIds Json?
+  submittedAt   DateTime      @default(now())
+
+  assignment RoomAssignment @relation(fields: [assignmentId], references: [id])
+
+  @@unique([assignmentId, kind])
+  @@map("room_checklist_reports")
+}
+
+model ReportVerification {
+  id           String             @id @default(cuid())
+  reportType   String // RoomChecklistReport | OfficeRound
+  reportId     String
+  status       VerificationStatus
+  comment      String?            @db.Text
+  verifiedById String
+  createdAt    DateTime           @default(now())
+
+  @@index([reportType, reportId])
+  @@map("report_verifications")
+}
+
+// ───────────────────────────── Staff ─────────────────────────────
+
+model Attendance {
+  id         String    @id @default(cuid())
+  userId     String
+  date       DateTime  @db.Date
+  checkInAt  DateTime
+  checkOutAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, date])
+  @@map("attendance")
+}
+
+model StaffReview {
+  id              String   @id @default(cuid())
+  staffId         String
+  attendanceId    String?
+  reviewerId      String
+  uniformOk       Boolean
+  hairOk          Boolean
+  nailsOk         Boolean
+  rating          Int
+  comment         String?  @db.Text
+  improvementNote String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  @@index([staffId, createdAt])
+  @@map("staff_reviews")
+}
+
+model OfficeRound {
+  id            String          @id @default(cuid())
+  officeBoyId   String
+  attendanceId  String
+  seq           Int
+  kind          OfficeRoundKind
+  dueAt         DateTime
+  submittedAt   DateTime?
+  cleanlinessOk Boolean?
+  stockOk       Boolean?
+  areas         Json?
+  issues        String?         @db.Text
+  attachmentIds Json?
+  status        TaskStatus      @default(PENDING)
+  createdAt     DateTime        @default(now())
+
+  @@unique([attendanceId, seq])
+  @@index([officeBoyId, status])
+  @@map("office_rounds")
+}
+
+model LeaveRequest {
+  id             String        @id @default(cuid())
+  requesterId    String
+  requesterRole  Role
+  kind           LeaveKind
+  startAt        DateTime
+  endAt          DateTime
+  reason         String        @db.Text
+  coveragePlan   String?       @db.Text
+  approverRole   Role // MANAGER or MD (Lead members → MARKETING_* per spec §7)
+  status         RequestStatus @default(PENDING)
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionReason String?       @db.Text
+  createdAt      DateTime      @default(now())
+
+  @@index([approverRole, status])
+  @@index([requesterId])
+  @@map("leave_requests")
+}
+
+model Complaint {
+  id              String          @id @default(cuid())
+  source          ComplaintSource
+  raisedById      String?
+  patientId       String?
+  appointmentId   String?
+  subject         String
+  detail          String          @db.Text
+  status          RequestStatus   @default(PENDING)
+  escalatedToMdAt DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  recipients ComplaintRecipient[]
+
+  @@index([status])
+  @@map("complaints")
+}
+
+model ComplaintRecipient {
+  id          String   @id @default(cuid())
+  complaintId String
+  userId      String
+  addedAt     DateTime @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id])
+
+  @@unique([complaintId, userId])
+  @@index([userId])
+  @@map("complaint_recipients")
+}
+
+model ApprovalRequest {
+  id             String        @id @default(cuid())
+  type           ApprovalType
+  subjectType    String
+  subjectId      String
+  requestedById  String
+  approverRole   Role
+  status         RequestStatus @default(PENDING)
+  reason         String?       @db.Text
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionReason String?       @db.Text
+  expiresAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([approverRole, status])
+  @@index([subjectType, subjectId])
+  @@map("approval_requests")
+}
+
+model HistoryAccessRequest {
+  id             String        @id @default(cuid())
+  doctorId       String
+  patientId      String
+  reason         String        @db.Text
+  status         RequestStatus @default(PENDING)
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionReason String?       @db.Text
+  expiresAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([doctorId, patientId, status])
+  @@map("history_access_requests")
+}
+
+// ───────────────────────────── Marketing ─────────────────────────────
+
+model AdRequest {
+  id          String        @id @default(cuid())
+  requesterId String
+  sheetId     String?
+  campaign    String?
+  kind        AdRequestKind
+  detail      String        @db.Text
+  reason      String?       @db.Text
+  status      RequestStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([requesterId])
+  @@index([status])
+  @@map("ad_requests")
+}
+
+/// Shared thread for AdRequest / Complaint / LeaveRequest / ApprovalRequest.
+model ThreadMessage {
+  id            String         @id @default(cuid())
+  threadType    String
+  threadId      String
+  authorId      String
+  body          String         @db.Text
+  statusChange  RequestStatus?
+  attachmentIds Json?
+  createdAt     DateTime       @default(now())
+
+  @@index([threadType, threadId, createdAt])
+  @@map("thread_messages")
+}
+
+model Offer {
+  id            String    @id @default(cuid())
+  title         String
+  serviceName   String?
+  description   String?   @db.Text
+  sheetId       String?
+  validFrom     DateTime
+  validTo       DateTime
+  attachmentId  String?
+  createdById   String
+  /// Ended early by marketing; history stays (spec §17).
+  withdrawnAt   DateTime?
+  withdrawnById String?
+  createdAt     DateTime  @default(now())
+
+  @@index([validFrom, validTo])
+  @@map("offers")
+}
+
+/// Muaz's annotation on a performance view, sent to Hamza as an issue/action (spec §17).
+model PerformanceNote {
+  id        String   @id @default(cuid())
+  authorId  String
+  memberId  String?
+  sheetId   String?
+  fromDate  String // clinic date YYYY-MM-DD
+  toDate    String
+  note      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("performance_notes")
+}
+
+// ───────────────────────────── Inventory ─────────────────────────────
+
+model Vendor {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  phone     String?
+  address   String?  @db.Text
+  products  String?  @db.Text
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("vendors")
+}
+
+model StockItem {
+  id                String    @id @default(cuid())
+  name              String    @unique
+  category          String
+  baseUnit          String // piece | ml | bottle | box | configured
+  packUnit          String?
+  packSize          Int? // base units per pack (e.g. box = 100 pieces)
+  minQty            Int // base units
+  preferredVendorId String?
+  active            Boolean   @default(true)
+  /// Set when the low-stock alert is sent; cleared when stock is back above minimum (one alert per episode, D-037).
+  lowStockAlertedAt DateTime?
+  createdAt         DateTime  @default(now())
+
+  batches      StockBatch[]
+  transactions StockTransaction[]
+
+  @@map("stock_items")
+}
+
+model StockBatch {
+  id              String      @id @default(cuid())
+  itemId          String
+  lotNo           String
+  expiryDate      DateTime?   @db.Date
+  vendorId        String?
+  receiptLineId   String?
+  unitCostPaisa   BigInt?
+  status          BatchStatus @default(AVAILABLE)
+  /// Set when the expiry alert (two months ahead) is sent — never repeated (D-037).
+  expiryAlertedAt DateTime?
+  statusReason    String?     @db.Text
+  createdAt       DateTime    @default(now())
+
+  item StockItem @relation(fields: [itemId], references: [id])
+
+  @@unique([itemId, lotNo])
+  @@index([expiryDate])
+  @@map("stock_batches")
+}
+
+/// Ledger — on-hand stock = SUM(quantity). Never updated or deleted (DB trigger).
+model StockTransaction {
+  id              String       @id @default(cuid())
+  itemId          String
+  batchId         String?
+  type            StockTxnType
+  quantity        Int // signed base units
+  unitCostPaisa   BigInt?
+  procedureTaskId String?
+  demandId        String?
+  receiptId       String?
+  vendorId        String?
+  reason          String?      @db.Text
+  actorId         String
+  idempotencyKey  String?      @unique
+  createdAt       DateTime     @default(now())
+
+  item StockItem @relation(fields: [itemId], references: [id])
+
+  @@index([itemId, createdAt])
+  @@index([batchId])
+  @@index([procedureTaskId])
+  @@map("stock_transactions")
+}
+
+model StockDemand {
+  id                  String       @id @default(cuid())
+  demandNumber        String?      @unique // assigned on approval
+  requestedById       String
+  requesterRole       Role
+  reason              String       @db.Text
+  status              DemandStatus @default(PENDING_MANAGER)
+  estimatedTotalPaisa BigInt       @default(0)
+  approvedById        String?
+  approvedAt          DateTime?
+  approverRole        Role?
+  decisionReason      String?      @db.Text
+  forwardedToMdAt     DateTime?
+  forwardedById       String?
+  closedAt            DateTime?
+  closedById          String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  lines StockDemandLine[]
+
+  @@index([status])
+  @@map("stock_demands")
+}
+
+model StockDemandLine {
+  id               String @id @default(cuid())
+  demandId         String
+  itemId           String
+  quantity         Int
+  estUnitCostPaisa BigInt @default(0)
+  receivedQty      Int    @default(0)
+
+  demand StockDemand @relation(fields: [demandId], references: [id])
+
+  @@map("stock_demand_lines")
+}
+
+model GoodsReceipt {
+  id              String   @id @default(cuid())
+  demandId        String?
+  vendorId        String
+  vendorInvoiceNo String?
+  attachmentId    String?
+  totalPaisa      BigInt
+  receivedById    String
+  idempotencyKey  String?  @unique
+  receivedAt      DateTime @default(now())
+
+  lines GoodsReceiptLine[]
+
+  @@index([vendorId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptLine {
+  id            String    @id @default(cuid())
+  receiptId     String
+  demandLineId  String?
+  itemId        String
+  quantity      Int
+  unitCostPaisa BigInt
+  lotNo         String
+  expiryDate    DateTime? @db.Date
+  batchId       String
+
+  receipt GoodsReceipt @relation(fields: [receiptId], references: [id])
+
+  @@map("goods_receipt_lines")
+}
+
+model SupplierReturn {
+  id          String   @id @default(cuid())
+  vendorId    String
+  receiptId   String?
+  itemId      String
+  batchId     String
+  quantity    Int
+  creditPaisa BigInt
+  reason      String   @db.Text
+  actorId     String
+  createdAt   DateTime @default(now())
+
+  @@map("supplier_returns")
+}
+
+model SupplierPayment {
+  id             String        @id @default(cuid())
+  vendorId       String
+  amountPaisa    BigInt
+  method         PaymentMethod
+  reference      String?
+  bankAccountId  String?
+  actorId        String
+  idempotencyKey String        @unique
+  paidAt         DateTime      @default(now())
+
+  @@index([vendorId])
+  @@map("supplier_payments")
+}
+
+model DamageReport {
+  id             String        @id @default(cuid())
+  itemId         String
+  batchId        String?
+  quantity       Int
+  reason         String        @db.Text
+  attachmentId   String?
+  reportedById   String
+  approverRole   Role          @default(MANAGER)
+  status         RequestStatus @default(PENDING)
+  reviewedById   String?
+  reviewedAt     DateTime?
+  decisionReason String?       @db.Text
+  createdAt      DateTime      @default(now())
+
+  @@map("damage_reports")
+}
+
+// ───────────────────────────── Patient experience ─────────────────────────────
+
+model Feedback {
+  id            String    @id @default(cuid())
+  appointmentId String    @unique
+  patientId     String
+  token         String    @unique // for /f/[token]
+  skipped       Boolean   @default(false)
+  doctorRating  Int?
+  staffRating   Int?
+  clinicRating  Int?
+  suggestion    String?   @db.Text
+  submittedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@map("feedback")
+}
+
+model FollowUp {
+  id            String     @id @default(cuid())
+  patientId     String
+  appointmentId String     @unique
+  dueDate       DateTime   @db.Date
+  doctorRating  Int?
+  staffRating   Int?
+  clinicRating  Int?
+  issue         String?    @db.Text
+  suggestion    String?    @db.Text
+  complaintId   String?
+  status        TaskStatus @default(PENDING)
+  completedById String?
+  completedAt   DateTime?
+  createdAt     DateTime   @default(now())
+
+  @@index([status, dueDate])
+  @@map("follow_ups")
+}
+
+model Aftercare {
+  id            String   @id @default(cuid())
+  appointmentId String   @unique
+  doctorId      String
+  skipped       Boolean
+  content       String?  @db.Text
+  outboxId      String?
+  createdAt     DateTime @default(now())
+
+  @@map("aftercare")
+}
+
+// ───────────────────────────── Messaging, jobs, infra ─────────────────────────────
+
+model Notification {
+  id          String    @id @default(cuid())
+  recipientId String
+  senderId    String?
+  senderLabel String // "System", person name, etc.
+  type        String
+  subject     String
+  body        String?   @db.Text
+  recordType  String?
+  recordId    String?
+  actionLabel String?
+  priority    Int       @default(0)
+  dedupeKey   String?   @unique
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([recipientId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model MessageOutbox {
+  id                String         @id @default(cuid())
+  channel           MessageChannel
+  template          String
+  toPhone           String
+  patientId         String?
+  recipientUserId   String?
+  payload           Json
+  relatedType       String?
+  relatedId         String?
+  status            MessageStatus  @default(QUEUED)
+  retryCount        Int            @default(0)
+  nextAttemptAt     DateTime       @default(now())
+  lastError         String?        @db.Text
+  errorClass        String?
+  terminal          Boolean        @default(false)
+  providerMessageId String?        @unique
+  providerResponse  Json?
+  idempotencyKey    String         @unique
+  createdById       String?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  failedAt          DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([relatedType, relatedId])
+  @@map("message_outbox")
+}
+
+model Job {
+  id             String    @id @default(cuid())
+  type           String
+  runAt          DateTime
+  payload        Json?
+  status         JobStatus @default(PENDING)
+  attempts       Int       @default(0)
+  lockedAt       DateTime?
+  lockedBy       String?
+  lastError      String?   @db.Text
+  idempotencyKey String    @unique
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([status, runAt])
+  @@map("jobs")
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(cuid())
+  key          String
+  userId       String
+  method       String
+  path         String   @db.VarChar(512)
+  requestHash  String
+  statusCode   Int?
+  responseBody Json?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@unique([userId, key])
+  @@map("idempotency_records")
+}
+
+/// Append-only. DB triggers reject UPDATE and DELETE.
+model AuditEvent {
+  id         BigInt   @id @default(autoincrement())
+  actorId    String?
+  actorRole  Role?
+  action     String
+  recordType String
+  recordId   String?
+  before     Json?
+  after      Json?
+  reason     String?  @db.Text
+  ip         String?
+  requestId  String?
+  createdAt  DateTime @default(now())
+
+  @@index([recordType, recordId])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_events")
+}
+
+model Setting {
+  key           String   @id
+  value         Json
+  isPlaceholder Boolean  @default(true) // true until clinic confirms (spec §26)
+  description   String   @db.Text
+  updatedById   String?
+  updatedAt     DateTime @updatedAt
+
+  @@map("settings")
+}
+
+model Attachment {
+  id           String      @id @default(cuid())
+  fileKey      String      @unique
+  route        UploadRoute
+  fileName     String
+  mime         String
+  size         Int
+  isPrivate    Boolean
+  publicUrl    String? // only for non-private routes (ad creatives)
+  uploadedById String
+  recordType   String
+  recordId     String
+  createdAt    DateTime    @default(now())
+
+  @@index([recordType, recordId])
+  @@map("attachments")
+}
+
+/// Counter table for human-readable unique numbers (demand slips, invoices, receipts).
+model Sequence {
+  name  String @id
+  value Int    @default(0)
+
+  @@map("sequences")
+}
+
+/// Transactional outbox for live updates (Socket.IO). Written in the same transaction as the change;
+/// the API process relays committed rows to rooms (`user:<id>`, `role:<ROLE>`) and marks them delivered.
+model RealtimeEvent {
+  id          BigInt    @id @default(autoincrement())
+  room        String
+  event       String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  deliveredAt DateTime?
+
+  @@index([deliveredAt, id])
+  @@map("realtime_events")
+}
