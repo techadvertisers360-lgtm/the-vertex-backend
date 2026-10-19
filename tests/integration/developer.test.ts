@@ -162,3 +162,18 @@ describe('D-043 — "view as": their tabs, data and live channel, read-only, aud
     expect((await call((await agentFor('MANAGER')).agent).post('/api/me/stop-view-as')).body).toEqual({ ok: true, viewAs: null });
   });
 });
+
+describe('D-045 — unexpected server errors reach the developer', () => {
+  it('a 500 answers the user generically and records who hit which endpoint', async () => {
+    const { errorHandler } = await import('../../src/middleware/error');
+    const u = await makeUser('RECEPTIONIST');
+    const res = { statusCode: 0, body: null as unknown, status(c: number) { this.statusCode = c; return this; }, json(b: unknown) { this.body = b; return this; } };
+    const req = { method: 'GET', baseUrl: '/api/reception', path: '/tracker', route: { path: '/tracker' }, originalUrl: '/api/reception/tracker?x=1', requestId: `rq-${uid()}`, ip: '127.0.0.1', actor: { id: u.id, role: 'RECEPTIONIST', displayName: u.displayName } };
+    await (errorHandler as unknown as (e: unknown, q: unknown, r: unknown, n: unknown) => Promise<void>)(new Error('boom: column missing'), req, res, () => {});
+    expect(res.statusCode).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain('boom');
+    const issue = await prisma.auditEvent.findFirstOrThrow({ where: { action: 'DEV_ISSUE', actorId: u.id } });
+    expect(issue.after).toMatchObject({ area: 'Server error', tried: 'GET /api/reception/tracker', reason: 'boom: column missing' });
+    expect(await prisma.notification.count({ where: { recipientId: dev.user.id, type: 'DEV_ISSUE', subject: { contains: u.displayName } } })).toBe(1);
+  });
+});

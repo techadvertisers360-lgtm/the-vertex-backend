@@ -2,7 +2,9 @@ import { Prisma } from '@prisma/client';
 import { prisma, type Tx } from '../../lib/prisma';
 import { parseSpreadsheetId } from '../../services/googleSheets';
 import type { ColumnMap } from '../leadSync/parse';
-import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors';
+import { AppError, ConflictError, NotFoundError, ValidationError } from '../../lib/errors';
+import { DEV_NOTIFIED_MSG, reportIssue } from '../../services/devIssues';
+import { inspectSheet, problemText, type Inspection } from '../leadSync/service';
 import { audit, type Actor } from '../../services/audit';
 import { notifyUsers } from '../../services/notifications';
 import { publish, userRoom } from '../../services/realtime';
@@ -61,7 +63,8 @@ export async function sheets() {
   ]);
   const name = (id: string | null) => users.find((u) => u.id === id) ?? null;
   return {
-    items: rows.map(({ syncLeaseOwner: _o, syncLeaseUntil, ...s }) => {
+    // The sync error text is for the developer only (D-045).
+    items: rows.map(({ syncLeaseOwner: _o, syncLeaseUntil, lastSyncError: _err, ...s }) => {
       const current = assignments.find((a) => a.sheetId === s.id && !a.unassignedAt) ?? null;
       return {
         ...s,
@@ -81,28 +84,65 @@ export interface SheetSource {
   columnMap?: ColumnMap | null;
 }
 
-/** Validate the Google source fields; the spreadsheet ID may be pasted as the full sheet URL. */
-async function source(tx: Tx, input: SheetSource, selfId?: string) {
-  if (input.googleSheetId === undefined && input.tabName === undefined && input.columnMap === undefined) return {};
+type ResolvedSource =
+  | { kind: 'unchanged' }
+  | { kind: 'unlink' }
+  | { kind: 'link'; googleSheetId: string; tabName: string; columnMap: ColumnMap; inspection: Inspection | null };
+
+/**
+ * Work out the Google source before the transaction (D-045): only the sheet link is needed — the tab and columns are
+ * detected from the sheet. An explicit tab + column map (API) is still accepted. If the sheet cannot be read the
+ * full reason goes to the developer and the person linking sees a neutral message.
+ */
+async function resolveSource(actor: Actor, input: SheetSource, before?: { googleSheetId: string | null }): Promise<ResolvedSource> {
+  if (input.googleSheetId === undefined && input.tabName === undefined && input.columnMap === undefined) return { kind: 'unchanged' };
   const raw = input.googleSheetId?.trim() ?? '';
-  const googleSheetId = raw ? parseSpreadsheetId(raw) : null;
-  if (raw && !googleSheetId) throw new ValidationError('Google Sheet link / ID samajh nahi aaya — poora sheet link paste karein.');
+  if (!raw) return { kind: 'unlink' };
+  const googleSheetId = parseSpreadsheetId(raw);
+  if (!googleSheetId) throw new ValidationError('Yeh Google Sheet ka link nahi lagta — browser se poora sheet link copy karke paste karein.');
   const tabName = input.tabName?.trim() || null;
-  if (googleSheetId && !tabName) throw new ValidationError('Tab ka naam likhein (sheet ke neeche wala tab).');
-  if (googleSheetId && !input.columnMap) throw new ValidationError('Name aur phone columns likhein.');
-  if (googleSheetId) {
-    const clash = await tx.metaSheet.findFirst({ where: { googleSheetId, tabName, ...(selfId ? { id: { not: selfId } } : {}) }, select: { title: true } });
-    if (clash) throw new ConflictError('SHEET_SOURCE_EXISTS', `Yeh Google Sheet tab pehle se "${clash.title}" se link hai.`);
+  if (before && googleSheetId === before.googleSheetId && !tabName && !input.columnMap) return { kind: 'unchanged' };
+  if (tabName && input.columnMap) return { kind: 'link', googleSheetId, tabName, columnMap: input.columnMap, inspection: null };
+  try {
+    const inspection = await inspectSheet(googleSheetId, { tabName, columnMap: input.columnMap ?? null });
+    return { kind: 'link', googleSheetId, tabName: inspection.tabName, columnMap: inspection.columnMap, inspection };
+  } catch (err) {
+    await reportIssue(actor, { area: 'Lead sheet', tried: `Sheet link karna — ${raw.slice(0, 200)}`, reason: problemText(err), context: { googleSheetId } });
+    throw new AppError(422, 'SHEET_LINK_FAILED', DEV_NOTIFIED_MSG);
   }
-  return { googleSheetId, tabName: googleSheetId ? tabName : null, columnMap: googleSheetId && input.columnMap ? (input.columnMap as Prisma.InputJsonValue) : Prisma.JsonNull };
 }
 
-export async function createSheet(actor: Actor, input: { externalId: string; title: string; campaign: string } & SheetSource) {
-  const externalId = input.externalId.trim();
-  if (!externalId || !input.title.trim() || !input.campaign.trim()) throw new ValidationError('Sheet ID, title aur campaign likhein.');
+async function sourceData(tx: Tx, src: ResolvedSource, selfId?: string) {
+  if (src.kind === 'unchanged') return {};
+  if (src.kind === 'unlink') return { googleSheetId: null, tabName: null, columnMap: Prisma.JsonNull };
+  const clash = await tx.metaSheet.findFirst({ where: { googleSheetId: src.googleSheetId, tabName: src.tabName, ...(selfId ? { id: { not: selfId } } : {}) }, select: { title: true } });
+  if (clash) throw new ConflictError('SHEET_SOURCE_EXISTS', `Yeh Google Sheet pehle se "${clash.title}" se link hai.`);
+  return { googleSheetId: src.googleSheetId, tabName: src.tabName, columnMap: src.columnMap as Prisma.InputJsonValue };
+}
+
+/** A free sheet / form identifier: Meta's form id when the sheet has one, else one made from the spreadsheet. */
+async function freeExternalId(tx: Tx, wanted: string) {
+  const base = wanted.slice(0, 180);
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? base : `${base}-${n}`;
+    if (!(await tx.metaSheet.findUnique({ where: { externalId: id }, select: { id: true } }))) return id;
+  }
+}
+
+/** Link a sheet. With a Google link, title / campaign / sheet id are optional — they come from the sheet itself. */
+export async function createSheet(actor: Actor, input: { externalId?: string; title?: string; campaign?: string } & SheetSource) {
+  const src = await resolveSource(actor, input);
+  const found = src.kind === 'link' ? src.inspection : null;
+  const title = input.title?.trim() || found?.title || '';
+  const campaign = input.campaign?.trim() || found?.campaign || found?.title || '';
+  const wantedId = input.externalId?.trim() || (src.kind === 'link' ? found?.formId || `GS-${src.googleSheetId.slice(0, 10)}-${src.tabName}` : '');
+  if (!wantedId || !title || !campaign) throw new ValidationError('Google Sheet ka link paste karein.');
   return prisma.$transaction(async (tx) => {
-    if (await tx.metaSheet.findUnique({ where: { externalId } })) throw new ConflictError('SHEET_EXISTS', 'Yeh sheet ID pehle se link hai.');
-    const s = await tx.metaSheet.create({ data: { externalId, title: input.title.trim(), campaign: input.campaign.trim(), createdById: actor.id!, ...(await source(tx, input)) } });
+    let externalId = wantedId;
+    if (input.externalId?.trim()) {
+      if (await tx.metaSheet.findUnique({ where: { externalId } })) throw new ConflictError('SHEET_EXISTS', 'Yeh sheet ID pehle se link hai.');
+    } else externalId = await freeExternalId(tx, wantedId);
+    const s = await tx.metaSheet.create({ data: { externalId, title, campaign, createdById: actor.id!, ...(await sourceData(tx, src)) } });
     await audit(tx, actor, { action: 'SHEET_CREATED', recordType: 'MetaSheet', recordId: s.id, after: s });
     return s;
   });
@@ -113,20 +153,23 @@ export async function createSheet(actor: Actor, input: { externalId: string; tit
  * The id column cannot change once leads were imported, because it defines each lead's import key.
  */
 export async function updateSheet(actor: Actor, id: string, input: { title?: string; campaign?: string; active?: boolean } & SheetSource) {
+  const current = await prisma.metaSheet.findUnique({ where: { id }, select: { googleSheetId: true } });
+  if (!current) throw new NotFoundError('Sheet');
+  const resolved = await resolveSource(actor, input, current);
   return prisma.$transaction(async (tx) => {
     const before = await tx.metaSheet.findUnique({ where: { id } });
     if (!before) throw new NotFoundError('Sheet');
-    const src = await source(tx, input, id);
-    if ('googleSheetId' in src && src.googleSheetId && before.columnMap) {
+    const src = await sourceData(tx, resolved, id);
+    if (resolved.kind === 'link' && before.columnMap) {
       const oldId = (before.columnMap as ColumnMap).id?.trim() || null;
-      const newId = input.columnMap?.id?.trim() || null;
+      const newId = resolved.columnMap.id?.trim() || null;
       const imported = await tx.lead.count({ where: { sheetId: id, externalRowId: { not: null } } });
       if (imported && oldId !== newId) throw new ValidationError('Leads import ho chuke hain — lead ID column ab badla nahi ja sakta (duplicates ban jayenge).');
     }
     const sourceChanged = 'googleSheetId' in src && (src.googleSheetId !== before.googleSheetId || src.tabName !== before.tabName);
     const s = await tx.metaSheet.update({
       where: { id },
-      data: { title: input.title?.trim(), campaign: input.campaign?.trim(), active: input.active, ...src, ...(sourceChanged ? { syncCursorRow: 1, consecutiveFailures: 0, lastSyncError: null, lastSyncStatus: null } : {}) },
+      data: { title: input.title?.trim() || undefined, campaign: input.campaign?.trim() || undefined, active: input.active, ...src, ...(sourceChanged ? { syncCursorRow: 1, consecutiveFailures: 0, lastSyncError: null, lastSyncStatus: null } : {}) },
     });
     await audit(tx, actor, { action: 'SHEET_UPDATED', recordType: 'MetaSheet', recordId: id, before, after: s });
     return s;

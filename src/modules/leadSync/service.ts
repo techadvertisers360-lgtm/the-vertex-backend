@@ -21,11 +21,13 @@ import {
 } from "../../services/googleSheets";
 import {
   columnMapSchema,
+  detectColumns,
   parseRow,
   resolveColumns,
   type ColumnMap,
   type ParsedRow,
 } from "./parse";
+import { DEV_NOTIFIED_MSG, reportIssue, reportIssueTx, whoLabel } from "../../services/devIssues";
 
 /**
  * Google Sheets → leads sync (Phase 9b, D-039).
@@ -34,8 +36,10 @@ import {
  *   workers; the `(sheetId, externalRowId)` unique key + createMany(skipDuplicates) guarantees no duplicate leads
  *   even if a lease expires mid-run.
  * - Only new rows become leads; existing leads are never updated, so app-side status / remarks are never overwritten.
- * - Every run writes a SheetSyncRun (sync log). After `meta.syncFailureAlertAfter` (3) failures in a row Hamza
- *   Zafar and Muaz Tahir are alerted once per failure streak.
+ * - Every run writes a SheetSyncRun (sync log). Problems go to the developer only (D-045): the first failure of a
+ *   streak alerts at once, again after `meta.syncFailureAlertAfter` failures in a row; skipped rows are reported too.
+ *   Staff never see the reason — only that the developer has been told.
+ * - Auto-detected sheets (`columnMap.auto`) re-read the header every run, so new form questions are not missed.
  */
 
 const LEASE_MS = 2 * 60_000;
@@ -107,20 +111,18 @@ function errorMessage(err: unknown): string {
   return "Sync mein ghair-mutawaqqa masla — agli sync mein dobara koshish hogi.";
 }
 
-/** Hamza Zafar (MARKETING_DIRECTOR) and Muaz Tahir (MARKETING_LEAD). */
-async function alertRecipients() {
-  const [hamza, muaz] = await Promise.all([
-    prisma.user.findMany({
-      where: { role: "MARKETING_DIRECTOR", active: true },
-      select: { id: true },
-    }),
-    prisma.user.findMany({
-      where: { role: "MARKETING_LEAD", active: true },
-      select: { id: true },
-    }),
-  ]);
-  return [...hamza, ...muaz].map((u) => u.id);
+/**
+ * Re-detect an auto sheet's columns from the current header. The lead-id column never changes once chosen (it is
+ * each lead's import key), so a detected id that differs from the stored one is ignored.
+ */
+function liveMap(stored: ColumnMap, header: string[]): ColumnMap {
+  if (!stored.auto) return stored;
+  const d = detectColumns(header);
+  if (!d.map) return stored;
+  return { ...d.map, id: stored.id ?? null };
 }
+
+const sameMap = (a: ColumnMap, b: ColumnMap) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Run one sync for a sheet whose lease the caller holds. Never throws for sheet / Google problems: they are
@@ -167,11 +169,13 @@ export async function runSync(
     const header =
       (await api.values(sheet.googleSheetId, a1(sheet.tabName, "1:1")))
         .values[0] ?? [];
-    const { cols, missing } = resolveColumns(header, map.data);
+    const columns = liveMap(map.data, header);
+    const { cols, missing } = resolveColumns(header, columns);
     if (!cols)
       throw new SyncError(
-        `Header row mein columns nahi mile: ${missing.join(", ")}`,
+        `Header row mein columns nahi mile: ${missing.join(", ")}. Row 1 ke columns: ${header.filter(Boolean).join(", ") || "(khali)"}`,
       );
+    const mapChanged = !sameMap(columns, map.data);
 
     const overlap = cols.id !== null ? ID_OVERLAP_ROWS : 0;
     const requestStart = Math.max(2, sheet.syncCursorRow + 1 - overlap);
@@ -288,8 +292,19 @@ export async function runSync(
                 lastSyncStatus: "SUCCESS",
                 lastSyncError: null,
                 consecutiveFailures: 0,
+                ...(mapChanged ? { columnMap: columns as Prisma.InputJsonValue } : {}),
               },
             });
+            if (skippedRows.length)
+              await reportIssueTx(tx, actor, {
+                area: "Lead sheet",
+                tried: `${opts.trigger === "MANUAL" ? "Sync now" : "Auto sync"} — ${sheet.campaign} (${sheet.title})`,
+                reason: `${skippedRows.length} row import nahi hui: ${skippedRows.slice(0, 20).map((r) => `Row ${r.row}: ${r.reason}`).join(" · ")}`,
+                recordType: "MetaSheet",
+                recordId: sheetId,
+                context: { runId, tab: sheet.tabName },
+                dedupeKey: `devissue:sheetskip:${runId}`,
+              });
             await tx.sheetSyncRun.create({
               data: {
                 ...base,
@@ -417,7 +432,6 @@ async function recordFailure(
   trigger: "SCHEDULED" | "MANUAL",
 ) {
   const alertAfter = await getSetting("meta.syncFailureAlertAfter");
-  const recipients = await alertRecipients();
   await prisma.$transaction(async (tx) => {
     const s = await tx.metaSheet.update({
       where: { id: sheetId },
@@ -438,24 +452,18 @@ async function recordFailure(
         recordId: sheetId,
         after: { runId: run.id, error: message },
       });
-    // Exactly once per failure streak: when the streak reaches the threshold.
-    if (s.consecutiveFailures === alertAfter) {
-      await audit(tx, systemActor, {
-        action: "SHEET_SYNC_ALERT",
+    // Developer only (D-045): every Sync now that fails (someone is waiting on it), and for the automatic sync the
+    // first failure of a streak plus a reminder when the streak reaches `meta.syncFailureAlertAfter`.
+    if (trigger === "MANUAL" || s.consecutiveFailures === 1 || s.consecutiveFailures === alertAfter)
+      await reportIssueTx(tx, actor, {
+        area: "Lead sheet",
+        tried: `${trigger === "MANUAL" ? "Sync now" : "Auto sync"} — ${s.campaign} (${s.title})`,
+        reason: `${message}${s.consecutiveFailures > 1 ? ` · ${s.consecutiveFailures} dafa lagatar fail` : ""}`,
         recordType: "MetaSheet",
         recordId: sheetId,
-        after: { failures: s.consecutiveFailures, error: message },
+        context: { runId: run.id, failures: s.consecutiveFailures, googleSheetId: s.googleSheetId, tab: s.tabName },
+        dedupeKey: `devissue:sheetfail:${run.id}`,
       });
-      await notifyUsers(tx, recipients, {
-        type: "SHEET_SYNC_FAILING",
-        subject: `Lead sync fail: ${s.campaign} (${s.consecutiveFailures} dafa)`,
-        body: `${s.title} — ${message}`,
-        recordType: "MetaSheet",
-        recordId: sheetId,
-        priority: 2,
-        dedupeKey: `sheetsync:fail:${sheetId}:${run.id}`,
-      });
-    }
   });
 }
 
@@ -517,23 +525,14 @@ export async function syncNow(
       "SYNC_BUSY",
       "Is sheet ki sync abhi chal rahi hai — thori der baad dekhein.",
     );
-  return runSync(sheetId, { trigger: "MANUAL", actor, owner });
+  const r = await runSync(sheetId, { trigger: "MANUAL", actor, owner });
+  // The reason went to the developer; the person who pressed Sync now only learns that it is being handled.
+  return { ...r, error: r.error ? DEV_NOTIFIED_MSG : null };
 }
 
 export async function syncConfig() {
-  const [method, intervalMin, alertAfter] = await Promise.all([
-    getSetting("meta.syncMethod"),
-    getSetting("meta.syncIntervalMin"),
-    getSetting("meta.syncFailureAlertAfter"),
-  ]);
   const email = serviceAccountEmail();
-  return {
-    configured: !!email,
-    serviceAccountEmail: email,
-    method,
-    intervalMin,
-    alertAfter,
-  };
+  return { configured: !!email, serviceAccountEmail: email };
 }
 
 /** Per linked sheet: last sync, status, error, failure streak — for Hamza / Muaz / MD (read-only). */
@@ -551,7 +550,8 @@ export async function syncStatus() {
   return {
     intervalMin,
     paused: method !== 'google_sheets',
-    items: sheets.map(({ assignments, ...s }) => ({ ...s, member: members.find((m) => m.id === assignments[0]?.memberId)?.displayName ?? null })),
+    // No error text for staff (D-045) — the developer has it.
+    items: sheets.map(({ assignments, lastSyncError: _e, ...s }) => ({ ...s, member: members.find((m) => m.id === assignments[0]?.memberId)?.displayName ?? null })),
   };
 }
 
@@ -568,72 +568,120 @@ export async function syncRuns(sheetId: string) {
     select: { id: true, displayName: true },
   });
   return {
-    items: rows.map((r) => ({
+    // Failure reasons and skipped-row reasons go to the developer only (D-045).
+    items: rows.map(({ error: _e, details: _d, workerId: _w, ...r }) => ({
       ...r,
       actor: actors.find((a) => a.id === r.actorId)?.displayName ?? null,
     })),
   };
 }
 
-/**
- * Test connection before / after saving: spreadsheet title + tabs, header row, missing columns, data row count
- * and two sample rows (phone masked). Google problems come back as `{ ok: false, error }`, not as an HTTP error.
- */
-export async function testConnection(input: {
-  googleSheetId: string;
+
+const headerKey = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+/** Max tabs looked at when the tab is auto-detected. */
+const MAX_TABS = 20;
+
+export interface Inspection {
+  title: string;
+  tabs: string[];
   tabName: string;
+  headers: string[];
   columnMap: ColumnMap;
-}) {
-  const serviceAccount = serviceAccountEmail();
+  dataRows: number;
+  invalidRows: number;
+  idColumn: boolean;
+  sample: { row: number; name: string; phone: string }[];
+  /** First value of Meta's `campaign_name` / `form_id` columns, used as defaults when linking. */
+  campaign: string | null;
+  formId: string | null;
+}
+
+/**
+ * Read a spreadsheet from its link (D-045): find the tab holding leads (the first one whose header has a name and a
+ * phone column — or the given tab), detect the columns, count rows and show two masked samples.
+ * Throws SyncError / SheetsApiError with the full reason (for the developer).
+ */
+export async function inspectSheet(
+  googleSheetId: string,
+  opts: { tabName?: string | null; columnMap?: ColumnMap | null } = {},
+): Promise<Inspection> {
+  const api = sheetsApi();
+  const meta = await api.spreadsheet(googleSheetId);
+  if (!meta.tabs.length) throw new SyncError(`Spreadsheet "${meta.title}" mein koi tab nahi.`);
+  if (opts.tabName && !meta.tabs.includes(opts.tabName))
+    throw new SyncError(`Tab "${opts.tabName}" nahi mila. Tabs: ${meta.tabs.join(", ")}`);
+  const candidates = opts.tabName ? [opts.tabName] : meta.tabs.slice(0, MAX_TABS);
+  const problems: string[] = [];
+  let found: { tab: string; header: string[]; map: ColumnMap; cols: NonNullable<ReturnType<typeof resolveColumns>["cols"]> } | null = null;
+  for (const tab of candidates) {
+    const top = (await api.values(googleSheetId, a1(tab, "A1:ZZZ50"))).values;
+    const header = top[0] ?? [];
+    let map: ColumnMap | null = opts.columnMap ?? null;
+    if (!map) {
+      const d = detectColumns(header, top.slice(1));
+      if (!d.map) {
+        problems.push(`Tab "${tab}": ${d.problem}`);
+        continue;
+      }
+      map = d.map;
+    }
+    const { cols, missing } = resolveColumns(header, map);
+    if (!cols) {
+      problems.push(`Tab "${tab}": header mein columns nahi mile: ${missing.join(", ")}`);
+      continue;
+    }
+    found = { tab, header, map, cols };
+    break;
+  }
+  if (!found) throw new SyncError(`"${meta.title}" mein leads wala tab nahi mila. ${problems.join(" · ")}`);
+
+  const data = await api.values(googleSheetId, a1(found.tab, "A2:ZZZ"));
+  const first = startRowOf(data.range) ?? 2;
+  const parsed = data.values.map((c, i) => parseRow(c, first + i, found.cols));
+  const leads = parsed.filter((p): p is Extract<ParsedRow, { kind: "lead" }> => p.kind === "lead");
+  const firstValue = (names: string[]) => {
+    const i = found.header.findIndex((h) => names.includes(headerKey(String(h ?? ""))));
+    if (i < 0) return null;
+    const v = data.values.map((r) => (r[i] ?? "").trim()).find(Boolean);
+    return v ? v.slice(0, 190) : null;
+  };
+  return {
+    title: meta.title,
+    tabs: meta.tabs,
+    tabName: found.tab,
+    headers: found.header,
+    columnMap: found.map,
+    dataRows: leads.length,
+    invalidRows: parsed.filter((p) => p.kind === "invalid").length,
+    idColumn: found.cols.id !== null,
+    sample: leads.slice(0, 2).map((l) => ({ row: l.row, name: l.name, phone: maskPhone(l.phone) })),
+    campaign: firstValue(["campaign name", "campaign"]),
+    formId: firstValue(["form id"]),
+  };
+}
+
+/** The reason as the developer should read it. */
+export function problemText(err: unknown): string {
+  return errorMessage(err);
+}
+
+/**
+ * "Check" before saving: only the link is needed — tab and columns are detected. Problems are reported to the
+ * developer; the person checking gets `{ ok: false, error: <neutral message> }`.
+ */
+export async function testConnection(
+  actor: Actor,
+  input: { googleSheetId: string; link?: string; tabName?: string | null; columnMap?: ColumnMap | null },
+) {
   try {
-    const api = sheetsApi();
-    const meta = await api.spreadsheet(input.googleSheetId);
-    if (!meta.tabs.includes(input.tabName))
-      return {
-        ok: false as const,
-        serviceAccount,
-        title: meta.title,
-        tabs: meta.tabs,
-        error: `Tab "${input.tabName}" nahi mila. Tabs: ${meta.tabs.join(", ")}`,
-      };
-    const header =
-      (await api.values(input.googleSheetId, a1(input.tabName, "1:1")))
-        .values[0] ?? [];
-    const { cols, missing } = resolveColumns(header, input.columnMap);
-    if (!cols)
-      return {
-        ok: false as const,
-        serviceAccount,
-        title: meta.title,
-        tabs: meta.tabs,
-        headers: header,
-        missing,
-        error: `Header row mein columns nahi mile: ${missing.join(", ")}`,
-      };
-    const data = await api.values(
-      input.googleSheetId,
-      a1(input.tabName, "A2:ZZZ"),
-    );
-    const first = startRowOf(data.range) ?? 2;
-    const parsed = data.values.map((c, i) => parseRow(c, first + i, cols));
-    const leads = parsed.filter(
-      (p): p is Extract<ParsedRow, { kind: "lead" }> => p.kind === "lead",
-    );
-    return {
-      ok: true as const,
-      serviceAccount,
-      title: meta.title,
-      tabs: meta.tabs,
-      headers: header,
-      missing: [],
-      dataRows: leads.length,
-      invalidRows: parsed.filter((p) => p.kind === "invalid").length,
-      idColumn: cols.id !== null,
-      sample: leads
-        .slice(0, 2)
-        .map((l) => ({ row: l.row, name: l.name, phone: maskPhone(l.phone) })),
-    };
+    return { ok: true as const, ...(await inspectSheet(input.googleSheetId, input)) };
   } catch (err) {
-    return { ok: false as const, serviceAccount, error: errorMessage(err) };
+    await reportIssue(actor, {
+      area: "Lead sheet",
+      tried: `Sheet link check — ${input.link ?? input.googleSheetId}`,
+      reason: errorMessage(err),
+      context: { googleSheetId: input.googleSheetId, by: whoLabel(actor) },
+    });
+    return { ok: false as const, error: DEV_NOTIFIED_MSG };
   }
 }

@@ -27,7 +27,7 @@ export const SETTING_DEFS = {
   'whatsapp.templates': { schema: z.record(z.string()), default: {}, placeholder: true, description: 'Internal template → approved provider template name mapping. §26 #4' },
   'meta.syncMethod': { schema: z.enum(['manual', 'csv', 'api', 'google_sheets']), default: 'google_sheets', placeholder: false, description: 'Meta lead sheet integration method. §26 #5 — client chose Google Sheets sync (2026-10-18, D-039); "manual" pauses the scheduled sync.' },
   'meta.syncIntervalMin': { schema: z.number().int().min(1).max(24 * 60), default: 3, placeholder: false, description: 'Minutes between scheduled Google Sheets syncs per assigned sheet (client 2026-10-18, D-039).' },
-  'meta.syncFailureAlertAfter': { schema: z.number().int().min(1).max(50), default: 3, placeholder: false, description: 'Alert Hamza Zafar and Muaz Tahir after this many failed syncs in a row on one sheet (client 2026-10-18, D-039).' },
+  'meta.syncFailureAlertAfter': { schema: z.number().int().min(1).max(50), default: 3, placeholder: false, description: 'Sheet sync problems go to the developer only (D-045): at the first failure, and a reminder after this many failures in a row on one sheet.' },
   'stock.allowNegative': { schema: z.boolean(), default: false, placeholder: true, description: 'Allow usage below zero stock. §26 #7' },
   'stock.nearExpiryUsable': { schema: z.boolean(), default: true, placeholder: true, description: 'Near-expiry (within alert window) batches count as usable. §26 #7' },
   'stock.expiryAlertMonths': { schema: z.number().int().min(1).max(12), default: 2, placeholder: false, description: 'Expiry alert lead time (spec §18: two months).' },

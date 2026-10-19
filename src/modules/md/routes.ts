@@ -59,7 +59,8 @@ leadAdminRouter.get('/sheets', route({ permission: 'leads:admin' }, async () => 
 leadAdminRouter.post(
   '/sheets',
   route(
-    { permission: 'leads:admin', status: 201, body: z.object({ externalId: z.string().trim().min(2).max(200), title: z.string().trim().min(2).max(200), campaign: z.string().trim().min(1).max(200), ...sheetSource }) },
+    // With a Google Sheet link everything else is optional — it is read from the sheet (D-045).
+    { permission: 'leads:admin', status: 201, body: z.object({ externalId: z.string().trim().max(200).optional(), title: z.string().trim().max(200).optional(), campaign: z.string().trim().max(200).optional(), ...sheetSource }) },
     async ({ actor, body }) => lead.createSheet(actor, body),
   ),
 );
@@ -73,11 +74,14 @@ leadAdminRouter.patch(
 leadAdminRouter.get('/sync-config', route({ permission: 'leads:admin' }, async () => sync.syncConfig()));
 leadAdminRouter.post(
   '/sheets/test-connection',
-  route({ permission: 'leads:admin', body: z.object({ googleSheetId: z.string().trim().min(1).max(500), tabName: z.string().trim().min(1).max(100), columnMap: columnMapSchema }) }, async ({ body }) => {
-    const id = parseSpreadsheetId(body.googleSheetId);
-    if (!id) throw new ValidationError('Google Sheet link / ID samajh nahi aaya — poora sheet link paste karein.');
-    return sync.testConnection({ ...body, googleSheetId: id });
-  }),
+  route(
+    { permission: 'leads:admin', body: z.object({ googleSheetId: z.string().trim().min(1).max(500), tabName: z.string().trim().max(100).nullable().optional(), columnMap: columnMapSchema.nullable().optional() }) },
+    async ({ actor, body }) => {
+      const id = parseSpreadsheetId(body.googleSheetId);
+      if (!id) throw new ValidationError('Yeh Google Sheet ka link nahi lagta — browser se poora sheet link copy karke paste karein.');
+      return sync.testConnection(actor, { googleSheetId: id, link: body.googleSheetId, tabName: body.tabName || null, columnMap: body.columnMap ?? null });
+    },
+  ),
 );
 leadAdminRouter.post('/sheets/:id/sync', route({ permission: 'leads:admin', params: idParam }, async ({ actor, params }) => sync.syncNow(actor, params.id)));
 leadAdminRouter.get('/sheets/:id/sync-runs', route({ permission: 'leads:admin', params: idParam }, async ({ params }) => sync.syncRuns(params.id)));

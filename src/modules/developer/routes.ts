@@ -50,3 +50,40 @@ developerRouter.post(
     return { ok: true, viewAs: { id: target.id, displayName: target.displayName, role: target.role }, home: ROLE_HOME[target.role] };
   }),
 );
+
+/**
+ * Problems staff ran into (D-045): who tried what, when, and the reason they were not shown. Newest first.
+ * `onBehalfOf` is set when the developer hit it while viewing as someone.
+ */
+developerRouter.get(
+  '/issues',
+  route({ permission: P, query: z.object({ before: z.coerce.number().int().positive().optional() }) }, async ({ query }) => {
+    const rows = await prisma.auditEvent.findMany({
+      where: { action: 'DEV_ISSUE', ...(query.before ? { id: { lt: BigInt(query.before) } } : {}) },
+      orderBy: { id: 'desc' },
+      take: 100,
+      select: { id: true, actorId: true, actorRole: true, onBehalfOfId: true, recordType: true, recordId: true, after: true, createdAt: true },
+    });
+    const ids = [...new Set(rows.flatMap((r) => [r.actorId, r.onBehalfOfId]).filter((x): x is string => !!x))];
+    const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, displayName: true, role: true } });
+    const who = (id: string | null) => users.find((u) => u.id === id) ?? null;
+    return {
+      items: rows.map((r) => {
+        const a = (r.after ?? {}) as { area?: string; tried?: string; reason?: string; context?: Record<string, unknown> };
+        return {
+          id: Number(r.id),
+          at: r.createdAt,
+          who: r.actorId ? (who(r.actorId) ?? { id: r.actorId, displayName: 'Unknown', role: r.actorRole }) : null,
+          onBehalfOf: who(r.onBehalfOfId),
+          area: a.area ?? '—',
+          tried: a.tried ?? '—',
+          reason: a.reason ?? '—',
+          context: a.context ?? null,
+          recordType: r.recordType,
+          recordId: r.recordId,
+        };
+      }),
+      next: rows.length === 100 ? Number(rows[rows.length - 1]!.id) : null,
+    };
+  }),
+);

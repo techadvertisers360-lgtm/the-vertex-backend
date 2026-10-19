@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { claimSheet, runSheetSync, runSync } from '../../src/modules/leadSync/service';
 import { SheetsApiError, setSheetsApi, startRowOf, type SheetsApi } from '../../src/services/googleSheets';
+import { DEV_NOTIFIED_MSG } from '../../src/services/devIssues';
 import { agentFor, call, makeLead, prisma, uid, uniquePhone } from './helpers';
 
 /**
@@ -49,8 +50,12 @@ let hamzaId: string;
 let muazId: string;
 let muaz: Api;
 let mgr: Api;
+let devId: string;
+const devIssues = (where: Record<string, unknown> = {}) => prisma.auditEvent.findMany({ where: { action: 'DEV_ISSUE', ...where }, orderBy: { id: 'asc' } });
+const devNotes = (recordId?: string) => prisma.notification.findMany({ where: { recipientId: devId, type: 'DEV_ISSUE', ...(recordId ? { recordId } : {}) } });
 
 beforeAll(async () => {
+  devId = (await agentFor('DEVELOPER')).user.id;
   setSheetsApi(fake);
   const h = await agentFor('MARKETING_DIRECTOR');
   hamza = call(h.agent);
@@ -82,26 +87,88 @@ async function linkedSheet(rows: string[][], map: Record<string, unknown> = MAP)
 }
 
 describe('D-039 — admin: link a Google Sheet, test connection, credentials never exposed', () => {
-  it('test connection shows title, headers, row count and a masked sample; missing columns are named', async () => {
+  it('Check needs only the link: finds the leads tab and columns, row count and a masked sample', async () => {
     const gid = sheetKey();
     const phone = uniquePhone();
-    fake.books.set(gid, { title: 'Meta Leads Oct', tabs: { Leads: [HEADER, metaRow('l:1', 'Sana', phone), metaRow('l:2', 'Bad', '12')] } });
-    const ok = await hamza.post('/api/lead-admin/sheets/test-connection', { googleSheetId: gid, tabName: 'Leads', columnMap: MAP });
+    fake.books.set(gid, { title: 'Meta Leads Oct', tabs: { Notes: [['hello']], Leads: [HEADER, metaRow('l:1', 'Sana', phone), metaRow('l:2', 'Bad', '12')] } });
+    const ok = await hamza.post('/api/lead-admin/sheets/test-connection', { googleSheetId: `https://docs.google.com/spreadsheets/d/${gid}/edit` });
     expect(ok.status).toBe(200);
-    expect(ok.body).toMatchObject({ ok: true, title: 'Meta Leads Oct', tabs: ['Leads'], headers: HEADER, dataRows: 1, invalidRows: 1, idColumn: true });
+    expect(ok.body).toMatchObject({
+      ok: true,
+      title: 'Meta Leads Oct',
+      tabName: 'Leads',
+      headers: HEADER,
+      dataRows: 1,
+      invalidRows: 1,
+      idColumn: true,
+      columnMap: { id: 'id', name: 'full_name', phone: 'phone_number', extra: ['created_time', 'treatment'], auto: true },
+    });
     expect(ok.body.sample[0].phone).not.toContain(phone.slice(-7));
 
-    const missing = await hamza.post('/api/lead-admin/sheets/test-connection', { googleSheetId: gid, tabName: 'Leads', columnMap: { name: 'full_name', phone: 'mobile' } });
-    expect(missing.body).toMatchObject({ ok: false, missing: ['mobile'] });
-    const badTab = await hamza.post('/api/lead-admin/sheets/test-connection', { googleSheetId: gid, tabName: 'Nope', columnMap: MAP });
-    expect(badTab.body.ok).toBe(false);
-    expect(badTab.body.error).toContain('Nope');
-
-    for (const api of [mgr, muaz]) expect((await api.post('/api/lead-admin/sheets/test-connection', { googleSheetId: gid, tabName: 'Leads', columnMap: MAP })).status).toBe(403);
+    for (const api of [mgr, muaz]) expect((await api.post('/api/lead-admin/sheets/test-connection', { googleSheetId: gid })).status).toBe(403);
     const cfg = await hamza.get('/api/lead-admin/sync-config');
     expect(cfg.status).toBe(200);
-    expect(cfg.body).toMatchObject({ method: 'google_sheets', intervalMin: 3, alertAfter: 3 });
+    expect(cfg.body).not.toHaveProperty('alertAfter');
     expect(JSON.stringify(cfg.body)).not.toMatch(/private_key|BEGIN PRIVATE/);
+  });
+
+  it('a sheet that cannot be read: staff see a neutral line, the developer gets who / what / why', async () => {
+    const gid = sheetKey();
+    fake.books.set(gid, { title: 'No Phone Sheet', tabs: { Sheet1: [['full_name', 'notes'], ['Ali', 'x']] } });
+    const before = (await devIssues()).length;
+    const r = await hamza.post('/api/lead-admin/sheets/test-connection', { googleSheetId: gid });
+    expect(r.body).toEqual({ ok: false, error: DEV_NOTIFIED_MSG });
+    expect(JSON.stringify(r.body)).not.toMatch(/phone|full_name|Sheet1/);
+    const link = await hamza.post('/api/lead-admin/sheets', { googleSheetId: gid });
+    expect(link.status).toBe(422);
+    expect(link.body.error).toMatchObject({ code: 'SHEET_LINK_FAILED', message: DEV_NOTIFIED_MSG });
+
+    const issues = (await devIssues()).slice(before);
+    expect(issues).toHaveLength(2);
+    expect(issues.every((i) => i.actorId === hamzaId)).toBe(true);
+    const after = issues[1]!.after as { area: string; tried: string; reason: string };
+    expect(after.area).toBe('Lead sheet');
+    expect(after.tried).toContain('Sheet link karna');
+    expect(after.reason).toContain('phone ka column nahi mila');
+    const note = (await devNotes()).find((n) => n.body?.includes('phone ka column nahi mila'));
+    expect(note?.subject).toContain('Marketing Director');
+    expect(await prisma.notification.count({ where: { recipientId: hamzaId, type: 'DEV_ISSUE' } })).toBe(0);
+
+    const dev = call((await agentFor('DEVELOPER')).agent);
+    const list = await dev.get('/api/developer/issues');
+    expect(list.status).toBe(200);
+    expect(list.body.items[0]).toMatchObject({ area: 'Lead sheet', who: { id: hamzaId, role: 'MARKETING_DIRECTOR' } });
+    expect((await hamza.get('/api/developer/issues')).status).toBe(403);
+  });
+
+  it('links from the link alone: title, campaign and form id come from the sheet; new columns are picked up later', async () => {
+    const gid = sheetKey();
+    const header = ['id', 'created_time', 'campaign_name', 'form_id', 'full_name', 'phone_number', 'city'];
+    const rows = [header, ['l:9001', '2026-10-19', 'Laser Nov', `F-${gid.slice(0, 8)}`, 'Mehwish', `p:+92${uniquePhone().slice(1)}`, 'Lahore']];
+    fake.books.set(gid, { title: 'Laser Nov Leads', tabs: { 'Form 1': rows } });
+    const s = await hamza.post('/api/lead-admin/sheets', { googleSheetId: `https://docs.google.com/spreadsheets/d/${gid}/edit#gid=0` });
+    expect(s.status).toBe(201);
+    expect(s.body).toMatchObject({ title: 'Laser Nov Leads', campaign: 'Laser Nov', externalId: `F-${gid.slice(0, 8)}`, tabName: 'Form 1', googleSheetId: gid });
+    const member = await agentFor('LEAD_MEMBER');
+    await hamza.post(`/api/lead-admin/sheets/${s.body.id}/assign`, { memberId: member.user.id });
+    expect((await hamza.post(`/api/lead-admin/sheets/${s.body.id}/sync`, {})).body.imported).toBe(1);
+    const first = await prisma.lead.findFirstOrThrow({ where: { sheetId: s.body.id } });
+    expect(first.remarks).toBe('Sheet: created_time: 2026-10-19 · campaign_name: Laser Nov · city: Lahore');
+
+    // Meta adds a question column: the next sync re-reads the header, nothing is lost
+    header.push('which_treatment?');
+    rows[1]!.push('Laser');
+    rows.push(['l:9002', '2026-10-19', 'Laser Nov', 'F', 'Rabia', `p:+92${uniquePhone().slice(1)}`, 'Karachi', 'Botox']);
+    expect((await hamza.post(`/api/lead-admin/sheets/${s.body.id}/sync`, {})).body.imported).toBe(1);
+    const second = await prisma.lead.findFirstOrThrow({ where: { sheetId: s.body.id, name: 'Rabia' } });
+    expect(second.remarks).toContain('which_treatment?: Botox');
+    expect(((await prisma.metaSheet.findUniqueOrThrow({ where: { id: s.body.id } })).columnMap as { extra: string[] }).extra).toContain('which_treatment?');
+
+    // a second sheet from the same form gets its own id
+    const gid2 = sheetKey();
+    fake.books.set(gid2, { title: 'Copy', tabs: { 'Form 1': rows.map((r) => [...r]) } });
+    const s2 = await hamza.post('/api/lead-admin/sheets', { googleSheetId: gid2 });
+    expect(s2.body.externalId).toBe(`F-${gid.slice(0, 8)}-2`);
   });
 
   it('the same Google tab cannot be linked twice; a bad link is rejected', async () => {
@@ -148,11 +215,16 @@ describe('D-039 — import: only new rows, duplicates flagged, app-side status /
     const mine = await call(member.agent).get('/api/lead/sheets');
     expect(JSON.stringify(mine.body)).not.toMatch(/googleSheetId|columnMap|Form Responses/);
     const card = (await hamza.get('/api/lead-admin/sheets')).body.items.find((s: { id: string }) => s.id === sheetId);
-    expect(card).toMatchObject({ lastSyncStatus: 'SUCCESS', lastSyncError: null, consecutiveFailures: 0, syncing: false });
+    expect(card).toMatchObject({ lastSyncStatus: 'SUCCESS', consecutiveFailures: 0, syncing: false });
+    expect(card).not.toHaveProperty('lastSyncError');
     expect(card.lastSyncAt).toBeTruthy();
     expect(card).not.toHaveProperty('syncLeaseOwner');
     const log = await hamza.get(`/api/lead-admin/sheets/${sheetId}/sync-runs`);
     expect(log.body.items[0]).toMatchObject({ status: 'SUCCESS', imported: 3, actor: expect.any(String) });
+    expect(log.body.items[0]).not.toHaveProperty('details');
+    // the skipped row is reported to the developer
+    const skip = await devIssues({ recordId: sheetId });
+    expect((skip[0]!.after as { reason: string }).reason).toContain('Row 5: Phone ghalat: 12');
   });
 
   it('a later sync adds only new rows and never touches leads already worked in the app', async () => {
@@ -245,27 +317,27 @@ describe('D-039 — no duplicates with two workers', () => {
   });
 });
 
-describe('D-039 — failures: error on the card, alert Hamza + Muaz after 3 in a row (once)', () => {
-  it('counts consecutive failures, alerts once at 3, resets on success', async () => {
+describe('D-045 — failures go to the developer only; staff never see the reason', () => {
+  it('Sync now failures: neutral message for Hamza, who / what / why for the developer; streak resets on success', async () => {
     const { sheetId } = await linkedSheet([HEADER, metaRow('l:801', 'Fail', uniquePhone())]);
-    const alerts = () => prisma.notification.findMany({ where: { type: 'SHEET_SYNC_FAILING', recordId: sheetId } });
     fake.fail = new SheetsApiError('FORBIDDEN', 'Sheet service account ke saath share nahi (test).');
     try {
-      for (let i = 1; i <= 2; i++) {
+      for (let i = 1; i <= 4; i++) {
         const r = await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {});
-        expect(r.body).toMatchObject({ status: 'FAILED', error: 'Sheet service account ke saath share nahi (test).' });
+        expect(r.body).toMatchObject({ status: 'FAILED', error: DEV_NOTIFIED_MSG });
       }
-      expect(await alerts()).toHaveLength(0);
-      await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {});
-      const sent = await alerts();
-      expect(sent.map((n) => n.recipientId).sort()).toEqual(expect.arrayContaining([hamzaId, muazId]));
-      expect(sent.length).toBeGreaterThanOrEqual(2);
-      const count = sent.length;
-      await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {});
-      expect(await alerts()).toHaveLength(count); // 4th failure: no repeat alert
+      const issues = await devIssues({ recordId: sheetId });
+      expect(issues).toHaveLength(4); // every Sync now that fails — someone is waiting on it
+      expect((issues[0]!.after as { reason: string }).reason).toBe('Sheet service account ke saath share nahi (test).');
+      expect((issues[3]!.after as { reason: string }).reason).toContain('4 dafa lagatar fail');
+      expect(issues[0]!.actorId).toBe(hamzaId);
+      expect(await devNotes(sheetId)).toHaveLength(4);
+      for (const id of [hamzaId, muazId]) expect(await prisma.notification.count({ where: { recipientId: id, type: { in: ['SHEET_SYNC_FAILING', 'DEV_ISSUE'] }, recordId: sheetId } })).toBe(0);
 
       const card = (await hamza.get('/api/lead-admin/sheets')).body.items.find((s: { id: string }) => s.id === sheetId);
-      expect(card).toMatchObject({ lastSyncStatus: 'FAILED', consecutiveFailures: 4, lastSyncError: 'Sheet service account ke saath share nahi (test).' });
+      expect(card).toMatchObject({ lastSyncStatus: 'FAILED', consecutiveFailures: 4 });
+      const staffViews = JSON.stringify([card, (await hamza.get(`/api/lead-admin/sheets/${sheetId}/sync-runs`)).body, (await muaz.get('/api/lead-reports/sync-status')).body]);
+      expect(staffViews).not.toContain('share nahi');
       expect(await prisma.lead.count({ where: { sheetId } })).toBe(0);
     } finally {
       fake.fail = null;
@@ -276,6 +348,23 @@ describe('D-039 — failures: error on the card, alert Hamza + Muaz after 3 in a
     const runs = await prisma.sheetSyncRun.findMany({ where: { sheetId }, orderBy: { startedAt: 'asc' } });
     expect(runs.map((r) => r.status)).toEqual(['FAILED', 'FAILED', 'FAILED', 'FAILED', 'SUCCESS']);
     await expect(prisma.sheetSyncRun.update({ where: { id: runs[0]!.id }, data: { error: 'x' } })).rejects.toThrow();
+  });
+
+  it('automatic sync: the developer is told at the first failure and reminded at 3 in a row, not every 3 minutes', async () => {
+    const { sheetId } = await linkedSheet([HEADER, metaRow('l:851', 'Auto Fail', uniquePhone())]);
+    fake.fail = new SheetsApiError('NETWORK', 'Google se connection nahi hua (test).');
+    try {
+      for (let i = 0; i < 5; i++) {
+        await prisma.metaSheet.update({ where: { id: sheetId }, data: { syncLeaseUntil: null, syncLeaseOwner: null } });
+        await runSync(sheetId, { trigger: 'SCHEDULED', owner: `w-f${i}` });
+      }
+    } finally {
+      fake.fail = null;
+    }
+    const issues = await devIssues({ recordId: sheetId });
+    expect(issues.map((i) => (i.after as { context: { failures: number } }).context.failures)).toEqual([1, 3]);
+    expect(issues.every((i) => i.actorId === null)).toBe(true);
+    expect((await devNotes(sheetId)).map((n) => n.subject)).toEqual(expect.arrayContaining([expect.stringContaining('System (auto)')]));
   });
 
   it('Muaz sees read-only sync health (no Google details); members cannot', async () => {

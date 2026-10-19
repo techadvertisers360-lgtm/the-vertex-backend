@@ -273,6 +273,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   ],
   DEVELOPER: [
     { key: 'accounts', label: 'Staff Accounts', path: '/developer', permission: 'developer:console' },
+    { key: 'issues', label: 'Problems', path: '/developer/issues', permission: 'developer:console' },
     { key: 'audit', label: 'Audit & History', path: '/developer/audit', permission: 'audit:search' },
     { key: 'settings', label: 'Settings', path: '/developer/settings', permission: 'settings:manage' },
   ],
