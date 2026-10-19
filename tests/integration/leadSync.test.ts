@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { claimSheet, runSheetSync, runSync } from '../../src/modules/leadSync/service';
+import { getSetting } from '../../src/services/settings';
 import { SheetsApiError, setSheetsApi, startRowOf, type SheetsApi } from '../../src/services/googleSheets';
 import { DEV_NOTIFIED_MSG } from '../../src/services/devIssues';
 import { agentFor, call, makeLead, prisma, uid, uniquePhone } from './helpers';
@@ -67,10 +68,13 @@ beforeAll(async () => {
 });
 afterAll(() => setSheetsApi(null));
 
-/** Link a Google tab through the admin API and assign it to a fresh member. */
+/**
+ * Link a Google tab through the admin API and assign it to a fresh member. Assigning imports at once (D-047), so the
+ * tab holds only the header while linking; the rows appear afterwards and each test syncs them explicitly.
+ */
 async function linkedSheet(rows: string[][], map: Record<string, unknown> = MAP) {
   const gid = sheetKey();
-  fake.books.set(gid, { title: `Meta Leads ${gid.slice(0, 6)}`, tabs: { 'Form Responses': rows } });
+  fake.books.set(gid, { title: `Meta Leads ${gid.slice(0, 6)}`, tabs: { 'Form Responses': [rows[0]!] } });
   const member = await agentFor('LEAD_MEMBER');
   const s = await hamza.post('/api/lead-admin/sheets', {
     externalId: `META-${uid()}`,
@@ -83,6 +87,8 @@ async function linkedSheet(rows: string[][], map: Record<string, unknown> = MAP)
   expect(s.status).toBe(201);
   expect(s.body.googleSheetId).toBe(gid);
   expect((await hamza.post(`/api/lead-admin/sheets/${s.body.id}/assign`, { memberId: member.user.id })).status).toBe(200);
+  fake.books.get(gid)!.tabs['Form Responses'] = rows;
+  await prisma.metaSheet.update({ where: { id: s.body.id }, data: { lastSyncAttemptAt: null } }); // the next automatic run is due
   return { sheetId: s.body.id as string, gid, member, rows };
 }
 
@@ -150,8 +156,8 @@ describe('D-039 — admin: link a Google Sheet, test connection, credentials nev
     expect(s.status).toBe(201);
     expect(s.body).toMatchObject({ title: 'Laser Nov Leads', campaign: 'Laser Nov', externalId: `F-${gid.slice(0, 8)}`, tabName: 'Form 1', googleSheetId: gid });
     const member = await agentFor('LEAD_MEMBER');
-    await hamza.post(`/api/lead-admin/sheets/${s.body.id}/assign`, { memberId: member.user.id });
-    expect((await hamza.post(`/api/lead-admin/sheets/${s.body.id}/sync`, {})).body.imported).toBe(1);
+    // assigning imports at once — no Sync now needed (D-047)
+    expect((await hamza.post(`/api/lead-admin/sheets/${s.body.id}/assign`, { memberId: member.user.id })).body.imported).toBe(1);
     const first = await prisma.lead.findFirstOrThrow({ where: { sheetId: s.body.id } });
     expect(first.remarks).toBe('Sheet: created_time: 2026-10-19 · campaign_name: Laser Nov · city: Lahore');
 
@@ -209,7 +215,7 @@ describe('D-039 — import: only new rows, duplicates flagged, app-side status /
     const note = await prisma.notification.findFirst({ where: { recipientId: member.user.id, type: 'NEW_LEADS', recordId: sheetId } });
     expect(note?.subject).toMatch(/^3 naya leads/);
     expect(await prisma.realtimeEvent.count({ where: { room: `user:${member.user.id}`, event: 'notification:new' } })).toBeGreaterThan(0);
-    expect(await prisma.auditEvent.count({ where: { action: 'SHEET_SYNC', recordId: sheetId } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { action: 'SHEET_SYNC', recordId: sheetId } })).toBe(2); // the import on assign + Sync now
 
     // the member sees them; the sheet card shows last sync and no Google details leak to the member
     const mine = await call(member.agent).get('/api/lead/sheets');
@@ -308,12 +314,12 @@ describe('D-039 — no duplicates with two workers', () => {
     await runSheetSync(t0, 'w-sched');
     expect(await prisma.lead.count({ where: { sheetId } })).toBe(1);
     rows.push(metaRow('l:702', 'Sched 2', uniquePhone()));
-    await runSheetSync(new Date(t0.getTime() + 60_000), 'w-sched'); // 1 min later: not due (interval 3)
+    await runSheetSync(new Date(t0.getTime() + 30_000), 'w-sched'); // 30 s later: not due yet
     expect(await prisma.lead.count({ where: { sheetId } })).toBe(1);
-    await runSheetSync(new Date(t0.getTime() + 3 * 60_000 + 1000), 'w-sched');
+    await runSheetSync(new Date(t0.getTime() + (await getSetting('meta.syncIntervalMin')) * 60_000 + 1000), 'w-sched');
     expect(await prisma.lead.count({ where: { sheetId } })).toBe(2);
-    const runs = await prisma.sheetSyncRun.findMany({ where: { sheetId } });
-    expect(runs.map((r) => r.trigger)).toEqual(['SCHEDULED', 'SCHEDULED']);
+    const runs = await prisma.sheetSyncRun.findMany({ where: { sheetId }, orderBy: { startedAt: 'asc' } });
+    expect(runs.map((r) => r.trigger)).toEqual(['MANUAL', 'SCHEDULED', 'SCHEDULED']); // first = the import on assign
   });
 });
 
@@ -346,7 +352,7 @@ describe('D-045 — failures go to the developer only; staff never see the reaso
     expect(ok.body).toMatchObject({ status: 'SUCCESS', imported: 1 });
     expect((await prisma.metaSheet.findUniqueOrThrow({ where: { id: sheetId } })).consecutiveFailures).toBe(0);
     const runs = await prisma.sheetSyncRun.findMany({ where: { sheetId }, orderBy: { startedAt: 'asc' } });
-    expect(runs.map((r) => r.status)).toEqual(['FAILED', 'FAILED', 'FAILED', 'FAILED', 'SUCCESS']);
+    expect(runs.map((r) => r.status)).toEqual(['SUCCESS', 'FAILED', 'FAILED', 'FAILED', 'FAILED', 'SUCCESS']); // first = on assign
     await expect(prisma.sheetSyncRun.update({ where: { id: runs[0]!.id }, data: { error: 'x' } })).rejects.toThrow();
   });
 
@@ -384,5 +390,66 @@ describe('D-045 — failures go to the developer only; staff never see the reaso
     await hamza.post(`/api/lead-admin/sheets/${sheetId}/unassign`, {});
     const r = await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {});
     expect(r.status).toBe(422);
+  });
+});
+
+describe('D-047 — linking is enough: leads come in by themselves; copied ids are not lost; delete hides the leads', () => {
+  it('assigning imports the sheet at once; later rows arrive with the automatic run, without anyone pressing sync', async () => {
+    const gid = sheetKey();
+    const rows = [HEADER, metaRow('l:1001', 'Auto One', uniquePhone()), metaRow('l:1002', 'Auto Two', uniquePhone())];
+    fake.books.set(gid, { title: 'Auto Leads', tabs: { Leads: rows } });
+    const s = await hamza.post('/api/lead-admin/sheets', { googleSheetId: gid });
+    expect(s.body.firstSync).toBeNull(); // no member yet
+    const member = await agentFor('LEAD_MEMBER');
+    const a = await hamza.post(`/api/lead-admin/sheets/${s.body.id}/assign`, { memberId: member.user.id });
+    expect(a.body.imported).toBe(2);
+    expect((await call(member.agent).get(`/api/lead/leads?sheetId=${s.body.id}`)).body.items).toHaveLength(2);
+
+    rows.push(metaRow('l:1003', 'Auto Three', uniquePhone()));
+    const interval = await getSetting('meta.syncIntervalMin');
+    await runSheetSync(new Date(Date.now() + interval * 60_000 + 1000), 'w-auto');
+    expect(await prisma.lead.count({ where: { sheetId: s.body.id } })).toBe(3);
+  });
+
+  it('a row that repeats another lead’s id but has a different phone is imported; a true duplicate is not', async () => {
+    const first = uniquePhone();
+    const rows = [HEADER, metaRow('l:2001', 'Original', first)];
+    const { sheetId } = await linkedSheet(rows);
+    expect((await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {})).body.imported).toBe(1);
+    rows.push(metaRow('l:2001', 'Copied Row New Person', uniquePhone())); // test row copied with the same id
+    rows.push(metaRow('l:2001', 'Original', first)); // exact repeat
+    const r = await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {});
+    expect(r.body.imported).toBe(1);
+    expect((await prisma.lead.findMany({ where: { sheetId }, orderBy: { sheetRowNumber: 'asc' } })).map((l) => l.name)).toEqual(['Original', 'Copied Row New Person']);
+    // stable: reading again adds nothing
+    expect((await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {})).body.imported).toBe(0);
+  });
+
+  it('delete: the member stops seeing the sheet and every lead from it; callbacks cancelled; history kept; can link again', async () => {
+    const rows = [HEADER, metaRow('l:3001', 'Del One', uniquePhone()), metaRow('l:3002', 'Del Two', uniquePhone())];
+    const { sheetId, gid, member } = await linkedSheet(rows);
+    await hamza.post(`/api/lead-admin/sheets/${sheetId}/sync`, {});
+    const lead = await prisma.lead.findFirstOrThrow({ where: { sheetId } });
+    const mapi = call(member.agent);
+    expect((await mapi.post(`/api/lead/leads/${lead.id}/activities`, { channel: 'CALL', result: 'NO_ANSWER', callbackAt: new Date(Date.now() + 3_600_000).toISOString() })).status).toBeLessThan(300);
+    expect((await mapi.get('/api/lead/leads')).body.items.some((l: { id: string }) => l.id === lead.id)).toBe(true);
+
+    expect((await muaz.post(`/api/lead-admin/sheets/${sheetId}/delete`)).status).toBe(403);
+    const del = await hamza.post(`/api/lead-admin/sheets/${sheetId}/delete`);
+    expect(del.status).toBe(200);
+    expect(del.body).toMatchObject({ hiddenLeads: 2 });
+
+    expect((await mapi.get('/api/lead/leads')).body.items.some((l: { sheetId: string }) => l.sheetId === sheetId)).toBe(false);
+    expect((await mapi.get('/api/lead/sheets')).body.items.some((x: { id: string }) => x.id === sheetId)).toBe(false);
+    expect((await mapi.get(`/api/lead/leads/${lead.id}`)).status).toBe(403);
+    expect(await prisma.leadCallback.count({ where: { leadId: lead.id, status: { in: ['PENDING', 'DUE'] } } })).toBe(0);
+    expect((await hamza.get('/api/lead-admin/sheets')).body.items.some((x: { id: string }) => x.id === sheetId)).toBe(false);
+    expect(await prisma.lead.count({ where: { sheetId } })).toBe(2); // kept for history
+    expect(await prisma.auditEvent.count({ where: { action: 'SHEET_DELETED', recordId: sheetId } })).toBe(1);
+    expect((await hamza.post(`/api/lead-admin/sheets/${sheetId}/assign`, { memberId: member.user.id })).status).toBe(404);
+    expect(await runSync(sheetId, { trigger: 'SCHEDULED', owner: 'w-del' }).then((r) => r.status)).toBe('FAILED'); // nothing to read
+
+    // the same Google sheet can be linked again
+    expect((await hamza.post('/api/lead-admin/sheets', { googleSheetId: gid })).status).toBe(201);
   });
 });

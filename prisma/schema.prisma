@@ -411,6 +411,10 @@ model MetaSheet {
   consecutiveFailures Int              @default(0)
   syncLeaseUntil      DateTime? // one sync per sheet at a time across API + workers
   syncLeaseOwner      String?
+  /// Deleted by Hamza / MD (D-047): hidden everywhere, unassigned, no more syncing. Leads stay in the database
+  /// (history, booking attribution) but no member sees them any more.
+  deletedAt           DateTime?
+  deletedById         String?
 
   assignments SheetAssignment[]
   leads       Lead[]

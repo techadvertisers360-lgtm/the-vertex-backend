@@ -194,6 +194,22 @@ export async function runSync(
     const leadsInRange = parsed.filter(
       (p): p is Extract<ParsedRow, { kind: "lead" }> => p.kind === "lead",
     );
+    // A row can repeat another lead's id (e.g. a row copied to add a test lead). When the id already belongs to a lead
+    // with a different phone, the row is keyed by id + phone so it is still imported — stable on every re-read (D-047).
+    // Same id and same phone is a true duplicate and stays skipped.
+    const idKeyed = leadsInRange.filter((l) => l.key.startsWith("id:"));
+    if (idKeyed.length) {
+      const prior = await prisma.lead.findMany({
+        where: { sheetId, externalRowId: { in: [...new Set(idKeyed.map((l) => l.key))] } },
+        select: { externalRowId: true, phone: true },
+      });
+      const phoneOf = new Map(prior.map((p) => [p.externalRowId!, p.phone]));
+      for (const l of idKeyed) {
+        const owner = phoneOf.get(l.key);
+        if (owner === undefined) phoneOf.set(l.key, l.phone);
+        else if (owner !== l.phone) l.key = `${l.key}|${l.phone}`.slice(0, 191);
+      }
+    }
     // Two writers inserting the same keys can deadlock in InnoDB: retry; the next attempt sees the rows already there.
     let attempt = 0;
     for (;;) {
@@ -501,6 +517,26 @@ export async function runSheetSync(now: Date, owner: string): Promise<number> {
     n++;
   }
   return n;
+}
+
+/**
+ * First import right after a sheet is linked / assigned (D-047), so the member sees the leads at once instead of after
+ * the next automatic run. Skipped quietly when the sheet is not ready (no link, no member, sync paused) or a sync is
+ * already running; problems are recorded and reported like any run. Never throws.
+ */
+export async function syncIfReady(sheetId: string, actor: Actor): Promise<SyncResult | null> {
+  try {
+    if ((await getSetting("meta.syncMethod")) !== "google_sheets") return null;
+    const s = await prisma.metaSheet.findUnique({ where: { id: sheetId }, select: { active: true, googleSheetId: true, tabName: true, deletedAt: true } });
+    if (!s || !s.active || s.deletedAt || !s.googleSheetId || !s.tabName || !(await currentMember(sheetId))) return null;
+    const owner = `link:${actor.id ?? "system"}:${randomUUID().slice(0, 8)}`;
+    if (!(await claimSheet(sheetId, owner, new Date(), null))) return null;
+    const r = await runSync(sheetId, { trigger: "MANUAL", actor, owner });
+    return { ...r, error: r.error ? DEV_NOTIFIED_MSG : null }; // the reason went to the developer
+  } catch (err) {
+    logger.error({ err, sheetId }, "first sheet sync failed");
+    return null;
+  }
 }
 
 // ───────────── Admin (Hamza / Usama, `leads:admin`) ─────────────

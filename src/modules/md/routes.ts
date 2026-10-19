@@ -61,14 +61,19 @@ leadAdminRouter.post(
   route(
     // With a Google Sheet link everything else is optional — it is read from the sheet (D-045).
     { permission: 'leads:admin', status: 201, body: z.object({ externalId: z.string().trim().max(200).optional(), title: z.string().trim().max(200).optional(), campaign: z.string().trim().max(200).optional(), ...sheetSource }) },
-    async ({ actor, body }) => lead.createSheet(actor, body),
+    async ({ actor, body }) => {
+      const s = await lead.createSheet(actor, body);
+      return { ...s, firstSync: await sync.syncIfReady(s.id, actor) };
+    },
   ),
 );
 leadAdminRouter.patch(
   '/sheets/:id',
-  route({ permission: 'leads:admin', params: idParam, body: z.object({ title: z.string().max(200).optional(), campaign: z.string().max(200).optional(), active: z.boolean().optional(), ...sheetSource }) }, async ({ actor, params, body }) =>
-    lead.updateSheet(actor, params.id, body),
-  ),
+  route({ permission: 'leads:admin', params: idParam, body: z.object({ title: z.string().max(200).optional(), campaign: z.string().max(200).optional(), active: z.boolean().optional(), ...sheetSource }) }, async ({ actor, params, body }) => {
+    const s = await lead.updateSheet(actor, params.id, body);
+    // A new link / reactivation imports at once (D-047).
+    return { ...s, firstSync: body.googleSheetId !== undefined || body.active ? await sync.syncIfReady(params.id, actor) : null };
+  }),
 );
 /** Google Sheets sync (Phase 9b, D-039). The service account key never leaves the server; only its email is shown. */
 leadAdminRouter.get('/sync-config', route({ permission: 'leads:admin' }, async () => sync.syncConfig()));
@@ -85,7 +90,17 @@ leadAdminRouter.post(
 );
 leadAdminRouter.post('/sheets/:id/sync', route({ permission: 'leads:admin', params: idParam }, async ({ actor, params }) => sync.syncNow(actor, params.id)));
 leadAdminRouter.get('/sheets/:id/sync-runs', route({ permission: 'leads:admin', params: idParam }, async ({ params }) => sync.syncRuns(params.id)));
-leadAdminRouter.post('/sheets/:id/assign', route({ permission: 'leads:admin', params: idParam, body: z.object({ memberId: z.string().min(1).max(64) }) }, async ({ actor, params, body }) => lead.assignSheet(actor, params.id, body.memberId)));
+leadAdminRouter.post(
+  '/sheets/:id/assign',
+  route({ permission: 'leads:admin', params: idParam, body: z.object({ memberId: z.string().min(1).max(64) }) }, async ({ actor, params, body }) => {
+    const r = await lead.assignSheet(actor, params.id, body.memberId);
+    // Leads appear for the member at once, not only after the next automatic run (D-047).
+    const first = await sync.syncIfReady(params.id, actor);
+    return { ...r, imported: first?.status === 'SUCCESS' ? first.imported : 0 };
+  }),
+);
+/** Delete a sheet: hidden from the lead team with all its leads; history kept (D-047). */
+leadAdminRouter.post('/sheets/:id/delete', route({ permission: 'leads:admin', params: idParam }, async ({ actor, params }) => lead.deleteSheet(actor, params.id)));
 leadAdminRouter.post('/sheets/:id/unassign', route({ permission: 'leads:admin', params: idParam }, async ({ actor, params }) => lead.unassignSheet(actor, params.id)));
 
 /** Offers / creatives (spec §17). Mounted at /offers. */

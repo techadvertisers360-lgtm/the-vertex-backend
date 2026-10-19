@@ -12,13 +12,26 @@ export function withCaCert(url: string, caPath: string): string {
 }
 
 /**
+ * Cap this instance's connection pool (pure; unit-tested). Every serverless instance opens its own pool and the
+ * database allows only so many connections in total (Aiven: 76), so on Vercel each instance keeps a few (D-047).
+ * An explicit `connection_limit` in the URL wins.
+ */
+export function withPoolLimit(url: string, limit: number): string {
+  if (/[?&]connection_limit=/.test(url)) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}connection_limit=${limit}&pool_timeout=20`;
+}
+
+/**
  * Serverless hosts have no project files for secrets, so the DB CA can come from `DATABASE_CA_CERT` (PEM text or
  * base64). It is written once to the temp dir and the connection URL is pointed at it (D-042).
  */
 function datasourceUrl(): string | undefined {
   const pem = process.env.DATABASE_CA_CERT?.trim();
-  const url = process.env.DATABASE_URL;
-  if (!pem || !url) return undefined;
+  let url = process.env.DATABASE_URL;
+  if (!url) return undefined;
+  const pool = Number(process.env.DATABASE_POOL_SIZE) || (process.env.VERCEL ? 3 : 0);
+  if (pool) url = withPoolLimit(url, pool);
+  if (!pem) return pool ? url : undefined;
   // Env UIs often store multi-line values with literal "\n"; restore real newlines.
   const text = pem.includes('BEGIN CERTIFICATE') ? pem.replace(/\\n/g, '\n') : Buffer.from(pem, 'base64').toString('utf8');
   const path = join(tmpdir(), 'vertex-db-ca.pem');

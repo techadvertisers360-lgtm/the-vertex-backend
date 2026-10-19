@@ -26,7 +26,7 @@ export const SETTING_DEFS = {
   'whatsapp.senderNumber': { schema: z.string(), default: '', placeholder: true, description: 'Clinic WhatsApp sender number. §26 #4' },
   'whatsapp.templates': { schema: z.record(z.string()), default: {}, placeholder: true, description: 'Internal template → approved provider template name mapping. §26 #4' },
   'meta.syncMethod': { schema: z.enum(['manual', 'csv', 'api', 'google_sheets']), default: 'google_sheets', placeholder: false, description: 'Meta lead sheet integration method. §26 #5 — client chose Google Sheets sync (2026-10-18, D-039); "manual" pauses the scheduled sync.' },
-  'meta.syncIntervalMin': { schema: z.number().int().min(1).max(24 * 60), default: 3, placeholder: false, description: 'Minutes between scheduled Google Sheets syncs per assigned sheet (client 2026-10-18, D-039).' },
+  'meta.syncIntervalMin': { schema: z.number().int().min(1).max(24 * 60), default: 1, placeholder: false, description: 'Minutes between automatic Google Sheets checks per assigned sheet (client: every minute, 2026-10-19, D-047).' },
   'meta.syncFailureAlertAfter': { schema: z.number().int().min(1).max(50), default: 3, placeholder: false, description: 'Sheet sync problems go to the developer only (D-045): at the first failure, and a reminder after this many failures in a row on one sheet.' },
   'stock.allowNegative': { schema: z.boolean(), default: false, placeholder: true, description: 'Allow usage below zero stock. §26 #7' },
   'stock.nearExpiryUsable': { schema: z.boolean(), default: true, placeholder: true, description: 'Near-expiry (within alert window) batches count as usable. §26 #7' },

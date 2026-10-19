@@ -22,7 +22,7 @@ export async function members() {
     prisma.sheetAssignment.findMany({ where: { unassignedAt: null } }),
     prisma.metaSheet.findMany({ select: { id: true, title: true, campaign: true, active: true } }),
   ]);
-  const openLeads = await prisma.lead.groupBy({ by: ['assignedMemberId'], where: { status: { notIn: ['BOOKED', 'NOT_INTERESTED'] } }, _count: { _all: true } });
+  const openLeads = await prisma.lead.groupBy({ by: ['assignedMemberId'], where: { status: { notIn: ['BOOKED', 'NOT_INTERESTED'] }, sheet: { deletedAt: null } }, _count: { _all: true } });
   return {
     items: rows.map((m) => ({
       ...m,
@@ -56,7 +56,7 @@ export async function updateMember(actor: Actor, id: string, input: { displayNam
 
 export async function sheets() {
   const [rows, assignments, users, leadCounts] = await Promise.all([
-    prisma.metaSheet.findMany({ orderBy: [{ active: 'desc' }, { createdAt: 'desc' }] }),
+    prisma.metaSheet.findMany({ where: { deletedAt: null }, orderBy: [{ active: 'desc' }, { createdAt: 'desc' }] }),
     prisma.sheetAssignment.findMany({ orderBy: { assignedAt: 'desc' } }),
     prisma.user.findMany({ where: { role: { in: ['LEAD_MEMBER', 'MD', 'MARKETING_DIRECTOR'] } }, select: { id: true, displayName: true, memberCode: true, active: true } }),
     prisma.lead.groupBy({ by: ['sheetId'], _count: { _all: true } }),
@@ -158,7 +158,7 @@ export async function updateSheet(actor: Actor, id: string, input: { title?: str
   const resolved = await resolveSource(actor, input, current);
   return prisma.$transaction(async (tx) => {
     const before = await tx.metaSheet.findUnique({ where: { id } });
-    if (!before) throw new NotFoundError('Sheet');
+    if (!before || before.deletedAt) throw new NotFoundError('Sheet');
     const src = await sourceData(tx, resolved, id);
     if (resolved.kind === 'link' && before.columnMap) {
       const oldId = (before.columnMap as ColumnMap).id?.trim() || null;
@@ -183,7 +183,7 @@ export async function updateSheet(actor: Actor, id: string, input: { title?: str
 export async function assignSheet(actor: Actor, sheetId: string, memberId: string) {
   return prisma.$transaction(async (tx) => {
     const sheet = await tx.metaSheet.findUnique({ where: { id: sheetId } });
-    if (!sheet) throw new NotFoundError('Sheet');
+    if (!sheet || sheet.deletedAt) throw new NotFoundError('Sheet');
     const m = await tx.user.findUnique({ where: { id: memberId }, select: { id: true, role: true, active: true, displayName: true } });
     if (!m || m.role !== 'LEAD_MEMBER' || !m.active) throw new ValidationError('Active Lead member chunein.');
     const current = await tx.sheetAssignment.findFirst({ where: { sheetId, unassignedAt: null } });
@@ -204,6 +204,31 @@ export async function assignSheet(actor: Actor, sheetId: string, memberId: strin
     await audit(tx, actor, { action: 'SHEET_ASSIGNED', recordType: 'MetaSheet', recordId: sheetId, before: { memberId: current?.memberId ?? null }, after: { memberId, movedLeads: moved } });
     await notifyUsers(tx, [memberId], { type: 'SHEET_ASSIGNED', subject: `Nayi sheet: ${sheet.title}`, body: `${sheet.campaign}${moved ? ` · ${moved} leads` : ''}`, recordType: 'MetaSheet', recordId: sheetId, sender: actor, dedupeKey: `sheet:${sheetId}:${memberId}:${now.getTime()}` });
     return { sheetId, memberId, moved };
+  });
+}
+
+/**
+ * Delete a sheet (D-047): the lead team stops seeing it and all its leads at once (the member's assignment ends —
+ * members only ever see leads of sheets assigned to them), pending callbacks are cancelled, syncing stops and the
+ * Google link is released so the same sheet can be linked again. Leads, their call history and booking attribution
+ * stay in the database (no hard deletes of history); the sheet disappears from every list.
+ */
+export async function deleteSheet(actor: Actor, sheetId: string) {
+  return prisma.$transaction(async (tx) => {
+    const sheet = await tx.metaSheet.findUnique({ where: { id: sheetId } });
+    if (!sheet || sheet.deletedAt) throw new NotFoundError('Sheet');
+    const now = new Date();
+    const current = await tx.sheetAssignment.findFirst({ where: { sheetId, unassignedAt: null } });
+    if (current) await tx.sheetAssignment.update({ where: { id: current.id }, data: { unassignedAt: now, unassignedById: actor.id } });
+    const callbacks = await tx.leadCallback.updateMany({ where: { lead: { sheetId }, status: { in: ['PENDING', 'DUE'] } }, data: { status: 'CANCELLED' } });
+    const leads = await tx.lead.count({ where: { sheetId } });
+    const after = await tx.metaSheet.update({
+      where: { id: sheetId },
+      data: { deletedAt: now, deletedById: actor.id, active: false, googleSheetId: null, tabName: null, syncLeaseUntil: null, syncLeaseOwner: null },
+    });
+    await audit(tx, actor, { action: 'SHEET_DELETED', recordType: 'MetaSheet', recordId: sheetId, before: sheet, after: { ...after, hiddenLeads: leads, cancelledCallbacks: callbacks.count, memberId: current?.memberId ?? null } });
+    if (current) await publish(tx, [userRoom(current.memberId)], 'queue:changed', {});
+    return { sheetId, hiddenLeads: leads, cancelledCallbacks: callbacks.count };
   });
 }
 

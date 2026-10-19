@@ -73,6 +73,10 @@ const schema = z.object({
     // A bare email is accepted and turned into mailto:.
     .transform((v) => (v && /^[^\s@:/]+@[^\s@]+\.[^\s@]+$/.test(v) ? `mailto:${v}` : v))
     .pipe(z.string().regex(/^(mailto:\S+@\S+|https:\/\/\S+)$/, 'VAPID_SUBJECT must be mailto:you@example.com or an https:// URL').optional()),
+  /** Run a worker cycle after requests (at most once a minute per instance). Default: on when running on Vercel. */
+  AUTO_TICK: z.enum(['true', 'false']).optional().transform((v) => (v === undefined ? undefined : v === 'true')),
+  /** Max DB connections per server instance (Prisma pool). Default on Vercel: 3 (serverless instances add up). */
+  DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(50).optional(),
   LOG_LEVEL: z.string().default('info'),
 });
 

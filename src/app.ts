@@ -98,8 +98,10 @@ export function createApp(): Express {
   app.use(express.json({ limit: '1mb' }));
   app.use('/api', requireClientHeader);
   // Serverless (Supabase realtime): deliver what this request published once its transaction has committed.
-  // Serverless relays run after the response: Supabase live events and/or Web Push (D-042, D-046).
-  if (env.REALTIME_PROVIDER === 'supabase' || pushEnabled()) app.use(relayAfterResponse);
+  // Serverless background work after the response: Supabase live events, Web Push, and on Vercel (or AUTO_TICK=true) a
+  // once-a-minute worker cycle so lead sheets sync without the external cron (D-042, D-046, D-047).
+  const autoTick = env.AUTO_TICK ?? !!process.env.VERCEL;
+  if (env.REALTIME_PROVIDER === 'supabase' || pushEnabled() || autoTick) app.use(relayAfterResponse({ autoTick }));
 
   // Unauthenticated
   app.use('/api/auth', authRouter);
