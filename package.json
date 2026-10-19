@@ -16,7 +16,7 @@
     "seed": "tsx prisma/seed.ts",
     "prisma:generate": "prisma generate",
     "postinstall": "prisma generate",
-    "vercel-build": "prisma generate && tsc --noEmit -p tsconfig.json && node -e \"require('node:fs').mkdirSync('public',{recursive:true})\""
+    "vercel-build": "prisma generate && tsc --noEmit -p tsconfig.json && node scripts/vercel-output.cjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
