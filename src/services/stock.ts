@@ -33,9 +33,9 @@ export async function usableBatches(db: Db, itemId: string, now = new Date()) {
     .sort((a, b) => (a.expiryDate?.getTime() ?? Infinity) - (b.expiryDate?.getTime() ?? Infinity)); // FEFO
 }
 
-/** What an Assistant may see: names, units and usable quantity — never cost (spec §12, §4). */
+/** What an Assistant may see: procedure products only (D-048) — names, units, usable quantity, never cost (spec §12, §4). */
 export async function stockForUsage(db: Db = prisma) {
-  const items = await db.stockItem.findMany({ where: { active: true }, select: { id: true, name: true, category: true, baseUnit: true, packUnit: true, packSize: true }, orderBy: { name: 'asc' } });
+  const items = await db.stockItem.findMany({ where: { active: true, kind: 'PROCEDURE' }, select: { id: true, name: true, category: true, baseUnit: true, packUnit: true, packSize: true }, orderBy: { name: 'asc' } });
   return Promise.all(items.map(async (i) => ({ ...i, usableQty: (await usableBatches(db, i.id)).reduce((s, b) => s + b.balance, 0) })));
 }
 
@@ -91,7 +91,8 @@ export async function checkLowStock(tx: Tx, itemId: string): Promise<void> {
   }
   const { count } = await tx.stockItem.updateMany({ where: { id: itemId, lowStockAlertedAt: null }, data: { lowStockAlertedAt: new Date() } });
   if (!count) return;
-  await notifyRoles(tx, ['MANAGER'], {
+  // Reception keeps the procedure / pharmacy stock now (D-048); the Manager still handles demands and purchases.
+  await notifyRoles(tx, ['MANAGER', 'RECEPTIONIST'], {
     type: 'LOW_STOCK',
     subject: `Low stock: ${item.name}`,
     body: `${left} ${item.baseUnit} baqi (minimum ${item.minQty}) — demand / purchase karein`,

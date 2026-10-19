@@ -426,6 +426,8 @@ export async function invoiceDetail(invoiceId: string) {
   ];
   return {
     ...inv,
+    // Pharmacy lines cancelled by a reversal line are marked (D-048); lines in the order they were added.
+    lines: [...inv.lines].sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime()).map((l) => ({ ...l, reversed: inv.lines.some((r) => r.reversesLineId === l.id) })),
     appointment: decorated,
     prescription,
     feedback,

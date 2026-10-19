@@ -201,6 +201,16 @@ enum StockTxnType {
   RETURN_TO_SUPPLIER
   DAMAGE
   ADJUSTMENT
+  /// Stock added at the Reception "Stock & batches" screen (D-048).
+  STOCK_IN
+  /// Pharmacy product sold on a patient's invoice (D-048).
+  SALE
+}
+
+/// What a product is for (D-048): used in procedures, or sold from the pharmacy at billing.
+enum StockKind {
+  PROCEDURE
+  PHARMACY
 }
 
 enum BatchStatus {
@@ -866,14 +876,22 @@ model Invoice {
 }
 
 model InvoiceLine {
-  id             String  @id @default(cuid())
-  invoiceId      String
-  description    String
-  planItemId     String?
-  quantity       Int     @default(1)
-  unitPricePaisa BigInt
-  discountPaisa  BigInt  @default(0)
-  lineTotalPaisa BigInt
+  id                String   @id @default(cuid())
+  invoiceId         String
+  description       String
+  planItemId        String?
+  quantity          Int      @default(1)
+  unitPricePaisa    BigInt
+  discountPaisa     BigInt   @default(0)
+  lineTotalPaisa    BigInt
+  /// Pharmacy line (D-048): the product sold, and the discount as given (percent in basis points, else fixed).
+  stockItemId       String?
+  discountPercentBp Int?
+  /// Lines are append-only: a mistaken pharmacy line is cancelled by a reversal line (negative quantity and
+  /// total) pointing at it; stock goes back (D-048).
+  reversesLineId    String?  @unique
+  reason            String?  @db.Text
+  createdAt         DateTime @default(now())
 
   invoice Invoice @relation(fields: [invoiceId], references: [id])
 
@@ -1320,6 +1338,10 @@ model StockItem {
   packUnit          String?
   packSize          Int? // base units per pack (e.g. box = 100 pieces)
   minQty            Int // base units
+  /// Procedure product or pharmacy product (D-048).
+  kind              StockKind @default(PROCEDURE)
+  /// Pharmacy selling price per base unit (D-048); procedure products carry cost on their batches instead.
+  salePricePaisa    BigInt?
   preferredVendorId String?
   active            Boolean   @default(true)
   /// Set when the low-stock alert is sent; cleared when stock is back above minimum (one alert per episode, D-037).
@@ -1362,6 +1384,8 @@ model StockTransaction {
   quantity        Int // signed base units
   unitCostPaisa   BigInt?
   procedureTaskId String?
+  /// Pharmacy sale: the invoice line it was sold on (D-048).
+  invoiceLineId   String?
   demandId        String?
   receiptId       String?
   vendorId        String?
@@ -1375,6 +1399,7 @@ model StockTransaction {
   @@index([itemId, createdAt])
   @@index([batchId])
   @@index([procedureTaskId])
+  @@index([invoiceLineId])
   @@map("stock_transactions")
 }
 

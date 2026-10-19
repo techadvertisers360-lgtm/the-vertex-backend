@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AppointmentStatus, AppointmentType, PaymentMethod } from '@prisma/client';
 import { idParam, route } from '../../middleware/route';
 import * as svc from './service';
+import * as pharmacy from './pharmacy';
+import * as rstock from './stock';
 
 /** Receptionist endpoints (spec §9). Manager may use the read views too. */
 export const receptionRouter = Router();
@@ -153,5 +155,59 @@ receptionRouter.post(
   route(
     { permission: 'appointments:reschedule_request', params: idParam, status: 201, body: z.object({ requestedStartAt: z.coerce.date().optional(), reason: z.string().min(2).max(1000) }) },
     async ({ actor, params, body }) => svc.rescheduleRequest(actor, params.id, body),
+  ),
+);
+
+// ───────────── Stock & batches (Reception, D-048) ─────────────
+const kind = z.enum(['PROCEDURE', 'PHARMACY']);
+const paisa = z.number().int().min(0).max(1_000_000_000_00);
+receptionRouter.get('/stock', route({ permission: 'stock:reception', query: z.object({ kind }) }, async ({ query }) => rstock.list(query.kind)));
+receptionRouter.post(
+  '/stock',
+  route(
+    {
+      permission: 'stock:reception',
+      idempotent: true,
+      status: 201,
+      body: z.object({
+        kind,
+        name: z.string().trim().min(2).max(120),
+        quantity: z.number().int().min(1).max(1_000_000),
+        pricePaisa: paisa,
+        unit: z.string().trim().max(20).optional(),
+        expiryDate: isoDate.optional(),
+        minQty: z.number().int().min(0).max(1_000_000).optional(),
+      }),
+    },
+    async ({ actor, body, idempotencyKey }) => rstock.addStock(actor, body, idempotencyKey!),
+  ),
+);
+receptionRouter.patch(
+  '/stock/:id',
+  route(
+    { permission: 'stock:reception', params: idParam, body: z.object({ name: z.string().trim().min(2).max(120).optional(), minQty: z.number().int().min(0).optional(), pricePaisa: paisa.optional(), active: z.boolean().optional() }) },
+    async ({ actor, params, body }) => rstock.updateProduct(actor, params.id, body),
+  ),
+);
+
+// ───────────── Pharmacy on the invoice (D-048) ─────────────
+receptionRouter.get('/pharmacy/products', route({ permission: 'reception:billing' }, async () => pharmacy.options()));
+const discount = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('NONE') }),
+  z.object({ type: z.literal('PERCENT'), percent: z.number().min(0).max(100) }),
+  z.object({ type: z.literal('FIXED'), amountPaisa: paisa }),
+]);
+receptionRouter.post(
+  '/invoices/:id/pharmacy',
+  route(
+    { permission: 'reception:billing', params: idParam, idempotent: true, status: 201, body: z.object({ itemId: z.string().min(1).max(64), quantity: z.number().int().min(1).max(100_000), unitPricePaisa: paisa, discount }) },
+    async ({ actor, params, body, idempotencyKey }) => pharmacy.addLine(actor, params.id, body, idempotencyKey!),
+  ),
+);
+receptionRouter.post(
+  '/invoices/:id/pharmacy/:lineId/reverse',
+  route(
+    { permission: 'reception:billing', params: z.object({ id: z.string().min(1).max(64), lineId: z.string().min(1).max(64) }), body: z.object({ reason: z.string().trim().min(2).max(500) }) },
+    async ({ actor, params, body }) => pharmacy.reverseLine(actor, params.id, params.lineId, body.reason),
   ),
 );
