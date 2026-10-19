@@ -59,9 +59,17 @@ const parsed = schema
     }
   })
   .safeParse(process.env);
+/** Startup failure caused by environment variables. The message lists variable NAMES and rules only — never values. */
+export class EnvConfigError extends Error {
+  constructor(readonly problems: Record<string, string[]>) {
+    super(`Invalid environment configuration: ${Object.entries(problems).map(([k, v]) => `${k} (${v.join('; ')})`).join(', ')}`);
+  }
+}
+
 if (!parsed.success) {
-  console.error('Invalid environment configuration:', parsed.error.flatten().fieldErrors);
-  throw new Error('Invalid environment configuration');
+  const problems = parsed.error.flatten().fieldErrors as Record<string, string[]>;
+  console.error('Invalid environment configuration:', problems);
+  throw new EnvConfigError(problems);
 }
 
 export const env = {
