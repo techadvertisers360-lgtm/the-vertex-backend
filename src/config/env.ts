@@ -1,6 +1,21 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+/**
+ * A value pasted into a hosting dashboard: tolerate surrounding spaces / quotes and a pasted `NAME=` prefix
+ * (copying the whole line from a key file). Empty = unset.
+ */
+const pasted = (name: string) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => {
+      let t = v?.trim() ?? '';
+      if (t.startsWith(`${name}=`)) t = t.slice(name.length + 1).trim();
+      t = t.replace(/^(['"])(.*)\1$/, '$2').trim();
+      return t || undefined;
+    });
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().default(4000),
@@ -52,9 +67,12 @@ const schema = z.object({
    * `npx web-push generate-vapid-keys`. All three set = push on; any missing = push off (in-app alerts still work).
    * VAPID_SUBJECT is a contact for the push services: `mailto:you@example.com` or an https URL.
    */
-  VAPID_PUBLIC_KEY: z.string().optional(),
-  VAPID_PRIVATE_KEY: z.string().optional(),
-  VAPID_SUBJECT: z.string().regex(/^(mailto:|https:\/\/)/, 'VAPID_SUBJECT must start with mailto: or https://').optional(),
+  VAPID_PUBLIC_KEY: pasted('VAPID_PUBLIC_KEY'),
+  VAPID_PRIVATE_KEY: pasted('VAPID_PRIVATE_KEY'),
+  VAPID_SUBJECT: pasted('VAPID_SUBJECT')
+    // A bare email is accepted and turned into mailto:.
+    .transform((v) => (v && /^[^\s@:/]+@[^\s@]+\.[^\s@]+$/.test(v) ? `mailto:${v}` : v))
+    .pipe(z.string().regex(/^(mailto:\S+@\S+|https:\/\/\S+)$/, 'VAPID_SUBJECT must be mailto:you@example.com or an https:// URL').optional()),
   LOG_LEVEL: z.string().default('info'),
 });
 
