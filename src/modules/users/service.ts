@@ -19,6 +19,10 @@ const MD_ONLY_TARGETS: Role[] = ['MD', 'MANAGER', 'MARKETING_DIRECTOR', 'MARKETI
  */
 export async function assertCanManageRole(actor: Actor, targetRole: Role): Promise<void> {
   const r = actor.role;
+  // The hidden developer account is never created or changed through the app (D-043).
+  if (targetRole === 'DEVELOPER') deny('User', undefined, 'users:developer_not_manageable');
+  // The developer manages every staff account, leadership included (D-043).
+  if (r === 'DEVELOPER') return;
   if (targetRole === 'LEAD_MEMBER') {
     if (r === 'MD' || r === 'MARKETING_DIRECTOR') return;
     deny('User', undefined, 'users:lead_member_admin_hamza_or_usama');
@@ -41,17 +45,20 @@ const publicUser = {
   title: true,
   active: true,
   isDemo: true,
+  mustChangePassword: true,
   createdAt: true,
 } as const;
 
 export async function listUsers(actor: Actor, filter: { role?: Role; active?: boolean; q?: string }) {
   const where = {
-    ...(filter.role ? { role: filter.role } : {}),
+    // The developer account is hidden from every list (D-043).
+    role: filter.role && filter.role !== 'DEVELOPER' ? filter.role : { not: 'DEVELOPER' as Role },
     ...(filter.active !== undefined ? { active: filter.active } : {}),
     ...(filter.q ? { OR: [{ displayName: { contains: filter.q } }, { memberCode: { contains: filter.q.toUpperCase() } }] } : {}),
   };
   // Marketing Director manages Lead members only.
   if (actor.role === 'MARKETING_DIRECTOR') Object.assign(where, { role: 'LEAD_MEMBER' });
+  if (filter.role === 'DEVELOPER') return [];
   return prisma.user.findMany({ where, select: publicUser, orderBy: [{ role: 'asc' }, { displayName: 'asc' }] });
 }
 
@@ -84,6 +91,8 @@ export async function createUser(actor: Actor, input: CreateUserInput) {
           memberCode: input.memberCode?.toUpperCase() ?? null,
           title: input.title ?? null,
           passwordHash,
+          // The admin knows this first password, so the person must choose their own at first sign-in (D-043).
+          mustChangePassword: true,
           createdById: actor.id,
         },
         select: publicUser,
@@ -148,4 +157,24 @@ export async function updateUser(actor: Actor, id: string, input: UpdateUserInpu
     await audit(tx, actor, { action: securityChange ? 'USER_ACCESS_CHANGED' : 'USER_UPDATED', recordType: 'User', recordId: id, before, after });
     return after;
   });
+}
+
+/**
+ * Admin sets a temporary password (D-043): the person must choose their own at next sign-in; all their sessions end.
+ * Same authority as editing the account (assertCanManageRole). The password itself is never stored or audited.
+ */
+export async function setTemporaryPassword(actor: Actor, id: string, password: string) {
+  const target = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
+  if (!target) throw new NotFoundError('User');
+  if (id === actor.id) throw new ValidationError('Apna password "Password badlein" se badlein.');
+  await assertCanManageRole(actor, target.role);
+  validatePasswordStrength(password);
+  const passwordHash = await hashPassword(password);
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true, tokenVersion: { increment: 1 } } });
+    await tx.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+    await publish(tx, [userRoom(id)], 'session:revoked', { reason: 'PASSWORD_RESET' });
+    await audit(tx, actor, { action: 'USER_PASSWORD_SET', recordType: 'User', recordId: id, after: { mustChangePassword: true } });
+  });
+  return { id, mustChangePassword: true };
 }

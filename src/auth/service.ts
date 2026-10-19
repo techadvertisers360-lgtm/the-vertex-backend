@@ -45,7 +45,7 @@ export interface IssuedSession {
   sessionId: string;
 }
 
-async function issueSession(user: User, meta: { ip?: string; userAgent?: string }): Promise<IssuedSession> {
+async function issueSession(user: User, meta: { ip?: string; userAgent?: string }, carry: { impersonatedUserId?: string | null } = {}): Promise<IssuedSession> {
   const refreshToken = randomToken(48);
   const refreshExpires = new Date(Date.now() + env.REFRESH_TTL_DAYS * 86400_000);
   const session = await prisma.session.create({
@@ -56,6 +56,8 @@ async function issueSession(user: User, meta: { ip?: string; userAgent?: string 
       expiresAt: refreshExpires,
       ip: meta.ip,
       userAgent: meta.userAgent?.slice(0, 512),
+      // Developer "view as" survives token refresh (D-043); never carried for any other role.
+      impersonatedUserId: user.role === 'DEVELOPER' ? (carry.impersonatedUserId ?? null) : null,
     },
   });
   const accessToken = signAccessToken({ sub: user.id, sid: session.id, tv: user.tokenVersion });
@@ -104,7 +106,7 @@ export async function refresh(refreshToken: string, meta: { ip?: string; userAge
   if (!s.user.active) throw new UnauthorizedError(ACCOUNT_DISABLED_MSG, 'ACCOUNT_DISABLED');
   if (s.tokenVersion !== s.user.tokenVersion) throw new UnauthorizedError();
 
-  const next = await issueSession(s.user, meta);
+  const next = await issueSession(s.user, meta, { impersonatedUserId: s.impersonatedUserId });
   // Only one concurrent refresh wins the rotation.
   const { count } = await prisma.session.updateMany({
     where: { id: s.id, revokedAt: null },
@@ -119,6 +121,31 @@ export async function refresh(refreshToken: string, meta: { ip?: string; userAge
 
 export async function logout(sessionId: string): Promise<void> {
   await prisma.session.updateMany({ where: { id: sessionId, revokedAt: null }, data: { revokedAt: new Date() } });
+}
+
+/**
+ * Signed-in user changes their own password (D-043). Needs the current password; clears "must change password";
+ * every other session ends (token version bump) and the caller gets a fresh session so they stay signed in.
+ */
+export async function changeOwnPassword(
+  userId: string,
+  currentSessionId: string,
+  input: { currentPassword: string; newPassword: string },
+  meta: { ip?: string; userAgent?: string },
+): Promise<IssuedSession> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !user.active) throw new UnauthorizedError();
+  if (!(await bcrypt.compare(input.currentPassword, user.passwordHash))) throw new ValidationError('Purana password ghalat hai.');
+  validatePasswordStrength(input.newPassword);
+  if (input.currentPassword === input.newPassword) throw new ValidationError('Naya password purane se mukhtalif ho.');
+  const passwordHash = await hashPassword(input.newPassword);
+  const updated = await prisma.$transaction(async (tx) => {
+    const u = await tx.user.update({ where: { id: userId }, data: { passwordHash, mustChangePassword: false, tokenVersion: { increment: 1 } } });
+    await tx.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    await audit(tx, { id: u.id, role: u.role, displayName: u.displayName, ip: meta.ip }, { action: 'PASSWORD_CHANGED', recordType: 'User', recordId: u.id, after: { previousSession: currentSessionId } });
+    return u;
+  });
+  return issueSession(updated, meta);
 }
 
 /** Always resolves (no account enumeration). Delivers the reset link through the message outbox. */

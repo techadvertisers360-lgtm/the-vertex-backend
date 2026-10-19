@@ -69,7 +69,11 @@ export async function search(actor: Actor, f: AuditFilter) {
   const limit = Math.min(f.limit ?? 50, 100);
   const rows = await prisma.auditEvent.findMany({ where, orderBy: { id: 'desc' }, take: limit + 1 });
   const page = rows.slice(0, limit);
-  const users = await prisma.user.findMany({ where: { id: { in: [...new Set(page.map((r) => r.actorId).filter((x): x is string => !!x))] } }, select: { id: true, displayName: true } });
+  const users = await prisma.user.findMany({
+    where: { id: { in: [...new Set(page.flatMap((r) => [r.actorId, r.onBehalfOfId]).filter((x): x is string => !!x))] } },
+    select: { id: true, displayName: true },
+  });
+  const nameOf = (id: string | null) => (id ? (users.find((u) => u.id === id)?.displayName ?? null) : null);
   const clinicalReader = actor.role === 'DOCTOR';
   return {
     items: page.map((r) => {
@@ -82,7 +86,8 @@ export async function search(actor: Actor, f: AuditFilter) {
         recordType: r.recordType,
         recordId: r.recordId,
         actorId: r.actorId,
-        actorName: r.actorId ? (users.find((u) => u.id === r.actorId)?.displayName ?? null) : 'System',
+        // The hidden developer is shown as "System Developer" (D-043), with the person whose screens were in view.
+        actorName: r.actorRole === 'DEVELOPER' ? `System Developer${r.onBehalfOfId ? ` (as ${nameOf(r.onBehalfOfId) ?? 'user'})` : ''}` : r.actorId ? nameOf(r.actorId) : 'System',
         actorRole: r.actorRole,
         reason: r.reason,
         before: wholeRecord ? (r.before ? MASK : null) : mask ? redact(r.before) : r.before,
@@ -97,7 +102,7 @@ export async function search(actor: Actor, f: AuditFilter) {
 /** Filter helpers for the search screen (people and stock items by name). */
 export async function lookups() {
   const [users, items] = await Promise.all([
-    prisma.user.findMany({ select: { id: true, displayName: true, role: true, active: true }, orderBy: { displayName: 'asc' } }),
+    prisma.user.findMany({ where: { role: { not: 'DEVELOPER' } }, select: { id: true, displayName: true, role: true, active: true }, orderBy: { displayName: 'asc' } }),
     prisma.stockItem.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
   ]);
   return { users, stockItems: items };

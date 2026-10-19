@@ -105,7 +105,7 @@ export async function approvals(actor: Actor) {
 export async function history(recordType: string, recordId: string) {
   const rows = await prisma.auditEvent.findMany({ where: { recordType, recordId }, orderBy: { id: 'asc' }, take: 200 });
   const users = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.actorId).filter((x): x is string => !!x))] } }, select: { id: true, displayName: true } });
-  return { items: rows.map((r) => ({ id: r.id.toString(), at: r.createdAt, action: r.action, actor: r.actorId ? (users.find((u) => u.id === r.actorId)?.displayName ?? null) : 'System', actorRole: r.actorRole, reason: r.reason })) };
+  return { items: rows.map((r) => ({ id: r.id.toString(), at: r.createdAt, action: r.action, actor: r.actorRole === 'DEVELOPER' ? 'System Developer' : r.actorId ? (users.find((u) => u.id === r.actorId)?.displayName ?? null) : 'System', actorRole: r.actorRole, reason: r.reason })) };
 }
 
 /** Doctor leave impacts the MD watches; "nudge" re-alerts the Managers (spec §15 "escalate if unresolved"). */
@@ -216,6 +216,6 @@ export async function completedActions(from: string, to: string, action?: string
     from,
     to,
     summary: Object.entries(COMPLETED_ACTIONS).map(([k, label]) => ({ action: k, label, count: counts.find((c) => c.action === k)?._count._all ?? 0 })),
-    items: detail.map((d) => ({ id: d.id.toString(), at: d.createdAt, action: d.action, recordType: d.recordType, recordId: d.recordId, actor: d.actorId ? (users.find((u) => u.id === d.actorId)?.displayName ?? null) : 'System' })),
+    items: detail.map((d) => ({ id: d.id.toString(), at: d.createdAt, action: d.action, recordType: d.recordType, recordId: d.recordId, actor: d.actorRole === 'DEVELOPER' ? 'System Developer' : d.actorId ? (users.find((u) => u.id === d.actorId)?.displayName ?? null) : 'System' })),
   };
 }

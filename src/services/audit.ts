@@ -9,6 +9,8 @@ export interface Actor {
   displayName: string;
   ip?: string;
   requestId?: string;
+  /** The hidden developer's id while viewing as this actor (D-043); audit rows then name the developer. */
+  impersonatorId?: string;
 }
 
 export const systemActor: Actor = { id: null, role: null, displayName: 'System' };
@@ -33,8 +35,10 @@ function json(v: unknown): Prisma.InputJsonValue | undefined {
 export async function audit(db: Db, actor: Actor, e: AuditInput): Promise<void> {
   await db.auditEvent.create({
     data: {
-      actorId: actor.id,
-      actorRole: actor.role,
+      // Viewing as someone (D-043): the developer is the actor; the viewed user is recorded as on-behalf-of.
+      actorId: actor.impersonatorId ?? actor.id,
+      actorRole: actor.impersonatorId ? 'DEVELOPER' : actor.role,
+      onBehalfOfId: actor.impersonatorId ? actor.id : null,
       action: e.action,
       recordType: e.recordType,
       recordId: e.recordId ?? null,

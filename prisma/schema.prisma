@@ -26,6 +26,7 @@ enum Role {
   MD
   MARKETING_DIRECTOR // Hamza Zafar — NOT Dr Hamza Rasool
   MARKETING_LEAD // Muaz Tahir
+  DEVELOPER // hidden system developer (D-043): never listed, can view as any staff user (read-only)
 }
 
 enum LeadStatus {
@@ -299,20 +300,22 @@ enum UploadRoute {
 // ───────────────────────────── Identity & auth ─────────────────────────────
 
 model User {
-  id           String   @id @default(cuid())
-  displayName  String
-  email        String?  @unique
-  phone        String?  @unique // normalizePhone()
-  memberCode   String?  @unique // Member ID login (Lead members / staff IDs)
-  passwordHash String
-  role         Role
-  active       Boolean  @default(true)
-  tokenVersion Int      @default(0) // bump to invalidate all access tokens
-  title        String? // e.g. "Marketing & Development Director / Co-Founder"
-  isDemo       Boolean  @default(false)
-  createdById  String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  displayName        String
+  email              String?  @unique
+  phone              String?  @unique // normalizePhone()
+  memberCode         String?  @unique // Member ID login (Lead members / staff IDs)
+  passwordHash       String
+  role               Role
+  active             Boolean  @default(true)
+  tokenVersion       Int      @default(0) // bump to invalidate all access tokens
+  title              String? // e.g. "Marketing & Development Director / Co-Founder"
+  isDemo             Boolean  @default(false)
+  /// Set when an admin gives a temporary password; the user must choose a new one on next sign-in (D-043).
+  mustChangePassword Boolean  @default(false)
+  createdById        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   createdBy     User?                @relation("UserCreatedBy", fields: [createdById], references: [id])
   createdUsers  User[]               @relation("UserCreatedBy")
@@ -326,17 +329,19 @@ model User {
 }
 
 model Session {
-  id               String    @id @default(cuid())
-  userId           String
-  refreshTokenHash String    @unique
-  tokenVersion     Int
-  expiresAt        DateTime
-  revokedAt        DateTime?
-  replacedById     String?
-  userAgent        String?   @db.VarChar(512)
-  ip               String?
-  createdAt        DateTime  @default(now())
-  lastUsedAt       DateTime  @default(now())
+  id                 String    @id @default(cuid())
+  userId             String
+  refreshTokenHash   String    @unique
+  tokenVersion       Int
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  replacedById       String?
+  /// Developer "view as" (D-043): this session shows another user's screens, read-only.
+  impersonatedUserId String?
+  userAgent          String?   @db.VarChar(512)
+  ip                 String?
+  createdAt          DateTime  @default(now())
+  lastUsedAt         DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
@@ -1626,18 +1631,20 @@ model IdempotencyRecord {
 
 /// Append-only. DB triggers reject UPDATE and DELETE.
 model AuditEvent {
-  id         BigInt   @id @default(autoincrement())
-  actorId    String?
-  actorRole  Role?
-  action     String
-  recordType String
-  recordId   String?
-  before     Json?
-  after      Json?
-  reason     String?  @db.Text
-  ip         String?
-  requestId  String?
-  createdAt  DateTime @default(now())
+  id           BigInt   @id @default(autoincrement())
+  actorId      String?
+  actorRole    Role?
+  /// When the developer acts while viewing as another user: that user's id (actorId is the developer).
+  onBehalfOfId String?
+  action       String
+  recordType   String
+  recordId     String?
+  before       Json?
+  after        Json?
+  reason       String?  @db.Text
+  ip           String?
+  requestId    String?
+  createdAt    DateTime @default(now())
 
   @@index([recordType, recordId])
   @@index([actorId, createdAt])

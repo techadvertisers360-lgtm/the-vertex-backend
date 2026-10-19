@@ -9,6 +9,7 @@ import * as auth from '../../auth/service';
 import { clearAuthCookies, REFRESH_COOKIE, setAuthCookies } from '../../auth/tokens';
 import { requireAuth } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
+import { audit } from '../../services/audit';
 
 export const authRouter = Router();
 
@@ -34,9 +35,14 @@ function body<T extends z.ZodTypeAny>(schema: T, req: Request): z.infer<T> {
 
 const meta = (req: Request) => ({ ip: req.ip, userAgent: req.get('user-agent') });
 
-function profile(user: { id: string; displayName: string; role: keyof typeof ROLE_HOME; title: string | null; email: string | null; phone: string | null; memberCode: string | null }) {
+function profile(
+  user: { id: string; displayName: string; role: keyof typeof ROLE_HOME; title: string | null; email: string | null; phone: string | null; memberCode: string | null; mustChangePassword: boolean },
+  viewAs?: { by: string } | null,
+) {
   return {
-    user: { id: user.id, displayName: user.displayName, role: user.role, title: user.title, email: user.email, phone: user.phone, memberCode: user.memberCode },
+    user: { id: user.id, displayName: user.displayName, role: user.role, title: user.title, email: user.email, phone: user.phone, memberCode: user.memberCode, mustChangePassword: viewAs ? false : user.mustChangePassword },
+    /** Developer "view as" (D-043): the screens are this user's, read-only. */
+    viewAs: viewAs ?? null,
     permissions: ROLE_PERMISSIONS[user.role],
     nav: NAV_MODULES[user.role].map(({ key, label, path }) => ({ key, label, path })),
     home: ROLE_HOME[user.role],
@@ -94,5 +100,27 @@ authRouter.post('/reset', limiter, async (req, res) => {
 export const meRouter = Router();
 meRouter.get('/', requireAuth, async (req, res) => {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } });
-  res.json(toJsonSafe(profile(user)));
+  res.json(toJsonSafe(profile(user, req.user!.impersonator ? { by: 'Developer' } : null)));
+});
+
+/** Change my own password (current + new). Not available while viewing as someone (requireAuth is read-only then). */
+meRouter.post('/password', requireAuth, async (req, res) => {
+  const input = body(z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8).max(200) }), req);
+  const session = await auth.changeOwnPassword(req.user!.id, req.user!.sessionId, input, meta(req));
+  setAuthCookies(res, session.accessToken, session.refreshToken, session.refreshExpires);
+  res.json({ ok: true });
+});
+
+/** Leave developer "view as" (D-043) — the only write allowed in that mode. */
+meRouter.post('/stop-view-as', requireAuth, async (req, res) => {
+  const dev = req.user!.impersonator;
+  if (!dev) {
+    res.json({ ok: true, viewAs: null });
+    return;
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.session.update({ where: { id: req.user!.sessionId }, data: { impersonatedUserId: null } });
+    await audit(tx, { id: dev.id, role: 'DEVELOPER', displayName: dev.displayName, ip: req.ip }, { action: 'VIEW_AS_STOPPED', recordType: 'User', recordId: req.user!.id });
+  });
+  res.json({ ok: true, viewAs: null });
 });

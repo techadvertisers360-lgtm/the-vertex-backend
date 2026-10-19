@@ -25,6 +25,7 @@ import { leadAdminRouter, mdRouter, offersRouter, performanceNotesRouter } from 
 import { webhooksRouter } from './modules/messaging/webhooks';
 import { messagesRouter } from './modules/messaging/routes';
 import { cronRouter, realtimeRouter } from './modules/platform/routes';
+import { developerRouter } from './modules/developer/routes';
 import { relayAfterResponse } from './realtime/afterResponse';
 
 /**
@@ -60,6 +61,7 @@ export const API_MOUNTS: [string, Router][] = [
   ['/office', officeRouter],
   ['/stock', stockRouter],
   ['/realtime', realtimeRouter],
+  ['/developer', developerRouter],
 ];
 
 /** Express app factory (no listen) so integration tests can drive it with supertest. */

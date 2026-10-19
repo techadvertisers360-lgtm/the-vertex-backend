@@ -70,6 +70,8 @@ export const PERMISSIONS = [
   'marketing:ad_requests',
   'marketing:offers',
   'offers:read',
+  // developer (D-043)
+  'developer:console', // hidden developer: staff accounts, passwords, "view as" any staff user (read-only)
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -175,6 +177,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'requests:inbox',
     'offers:read',
   ],
+  /** Hidden system developer (D-043): manages every account; never checks in, raises requests or appears in lists. */
+  DEVELOPER: ['notifications:own', 'files:read', 'developer:console', 'users:manage', 'settings:manage', 'audit:search'],
 };
 
 export function hasPermission(role: Role, p: Permission): boolean {
@@ -267,6 +271,11 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'complaints', label: 'Complaints', path: '/marketing/muaz/complaints', permission: 'requests:inbox' },
     { key: 'my-requests', label: 'My Leave & Complaints', path: '/marketing/muaz/my-requests', permission: 'requests:own' },
   ],
+  DEVELOPER: [
+    { key: 'accounts', label: 'Staff Accounts', path: '/developer', permission: 'developer:console' },
+    { key: 'audit', label: 'Audit & History', path: '/developer/audit', permission: 'audit:search' },
+    { key: 'settings', label: 'Settings', path: '/developer/settings', permission: 'settings:manage' },
+  ],
 };
 
 export const ROLE_HOME: Record<Role, string> = {
@@ -279,4 +288,5 @@ export const ROLE_HOME: Record<Role, string> = {
   MD: '/md',
   MARKETING_DIRECTOR: '/marketing/hamza',
   MARKETING_LEAD: '/marketing/muaz',
+  DEVELOPER: '/developer',
 };

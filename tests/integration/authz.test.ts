@@ -12,12 +12,14 @@ import { agentFor, call, makeLead, makeSheet, makeUser, prisma, uid, uniquePhone
  * every role that lacks the route's permission; the server must answer 403 (FORBIDDEN) before touching any data.
  */
 
-const ROLES: Role[] = ['LEAD_MEMBER', 'RECEPTIONIST', 'DOCTOR', 'ASSISTANT', 'OFFICE_BOY', 'MANAGER', 'MD', 'MARKETING_DIRECTOR', 'MARKETING_LEAD'];
+const ROLES: Role[] = ['LEAD_MEMBER', 'RECEPTIONIST', 'DOCTOR', 'ASSISTANT', 'OFFICE_BOY', 'MANAGER', 'MD', 'MARKETING_DIRECTOR', 'MARKETING_LEAD', 'DEVELOPER'];
 
 /** Raw handlers (not built with route()) and why they are safe for every signed-in role. */
 const RAW_ALLOWED: Record<string, string> = {
   'GET /me/': 'own session only (role-specific nav comes from the server)',
   'GET /files/:id/content': 'checks files:read itself, then the same record-scope rule as /files/:id/url',
+  'POST /me/password': 'own password only; needs the current password',
+  'POST /me/stop-view-as': 'leaves developer view-as for the own session only (no-op otherwise)',
 };
 
 interface RouteInfo {
