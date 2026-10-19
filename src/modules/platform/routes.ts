@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { env } from '../../config/env';
 import { NotFoundError, UnauthorizedError } from '../../lib/errors';
 import { logger } from '../../lib/misc';
+import { prisma } from '../../lib/prisma';
 import { route } from '../../middleware/route';
 import { runTick } from '../../jobs/tick';
 import { issueRealtimeToken, supabaseTransport } from '../../realtime/supabase';
@@ -39,6 +40,56 @@ async function tick(req: Request, res: import('express').Response) {
   if (result.jobs || result.messages || result.sheetsSynced || result.realtime) logger.info(result, 'cron tick');
   res.json({ ok: true, ...result });
 }
+/**
+ * Deployment diagnostics (CRON_SECRET-protected): which settings are present (names / booleans only), and whether
+ * the database answers — with Prisma's error code and message when it does not (connection strings stripped).
+ */
+cronRouter.get('/health', async (req, res) => {
+  if (!env.CRON_SECRET) throw new NotFoundError('Endpoint');
+  if (!sameSecret(secretFrom(req), env.CRON_SECRET)) throw new UnauthorizedError('Invalid cron secret', 'CRON_UNAUTHORIZED');
+  const url = process.env.DATABASE_URL ?? '';
+  const started = Date.now();
+  let db: { ok: boolean; ms: number; code?: string; error?: string };
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    db = { ok: true, ms: Date.now() - started };
+  } catch (err) {
+    const e = err as { code?: string; errorCode?: string; message?: string };
+    const message = String(e.message ?? err)
+      .replace(/mysql:\/\/\S+/g, 'mysql://***')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(-3)
+      .join(' | ')
+      .slice(0, 500);
+    db = { ok: false, ms: Date.now() - started, code: e.code ?? e.errorCode, error: message };
+  }
+  res.json({
+    ok: db.ok,
+    db,
+    database: {
+      host: (() => {
+        try {
+          return new URL(url).hostname;
+        } catch {
+          return 'unparseable DATABASE_URL';
+        }
+      })(),
+      caFromEnv: !!process.env.DATABASE_CA_CERT,
+      caLooksLikePem: (process.env.DATABASE_CA_CERT ?? '').includes('BEGIN CERTIFICATE'),
+      urlHasSslcertPath: /[?&]sslcert=/.test(url),
+      urlHasSslaccept: /[?&]sslaccept=/.test(url),
+    },
+    settings: Object.fromEntries(
+      ['JWT_ACCESS_SECRET', 'FRONTEND_ORIGIN', 'PUBLIC_APP_URL', 'COOKIE_SECURE', 'TRUST_PROXY', 'REALTIME_PROVIDER', 'SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'SUPABASE_JWT_SECRET', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'UPLOADTHING_TOKEN'].map((k) => [k, !!process.env[k]]),
+    ),
+    realtime: env.REALTIME_PROVIDER,
+    node: process.version,
+    region: process.env.VERCEL_REGION ?? null,
+    time: new Date().toISOString(),
+  });
+});
 cronRouter.get('/tick', tick);
 cronRouter.post('/tick', tick);
 
