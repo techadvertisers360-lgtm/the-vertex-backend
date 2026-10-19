@@ -24,6 +24,8 @@ import { cashRouter, inventoryRouter } from './modules/inventory/routes';
 import { leadAdminRouter, mdRouter, offersRouter, performanceNotesRouter } from './modules/md/routes';
 import { webhooksRouter } from './modules/messaging/webhooks';
 import { messagesRouter } from './modules/messaging/routes';
+import { cronRouter, realtimeRouter } from './modules/platform/routes';
+import { relayAfterResponse } from './realtime/afterResponse';
 
 /**
  * Authenticated routers in mount order (all behind requireAuth). Exported so the authorization test can walk every
@@ -57,18 +59,19 @@ export const API_MOUNTS: [string, Router][] = [
   ['/lead-reports', performanceNotesRouter],
   ['/office', officeRouter],
   ['/stock', stockRouter],
+  ['/realtime', realtimeRouter],
 ];
 
 /** Express app factory (no listen) so integration tests can drive it with supertest. */
 export function createApp(): Express {
   const app = express();
-  app.set('trust proxy', 1);
+  app.set('trust proxy', env.trustProxy);
   app.disable('x-powered-by');
   app.use(requestId);
   app.use(helmet());
   app.use(
     cors({
-      origin: env.FRONTEND_ORIGIN.split(','),
+      origin: env.FRONTEND_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean),
       credentials: true,
       allowedHeaders: ['Content-Type', 'Idempotency-Key', 'X-VH-Client', 'X-Request-Id', 'x-uploadthing-package', 'x-uploadthing-version', 'traceparent', 'b3'],
     }),
@@ -79,16 +82,24 @@ export function createApp(): Express {
     res.json({ ok: true });
   });
 
+  // Root: lets anyone opening the deployed backend URL see the API is up (no data, no auth).
+  app.get('/', (_req, res) => {
+    res.json({ status: 'ok', service: 'Vertex Health API', time: new Date().toISOString() });
+  });
+
   // UploadThing parses its own body and receives server callbacks without cookies; auth runs inside its middleware.
   app.use('/api/uploadthing', uploadthingHandler());
 
   app.use(express.json({ limit: '1mb' }));
   app.use('/api', requireClientHeader);
+  // Serverless (Supabase realtime): deliver what this request published once its transaction has committed.
+  if (env.REALTIME_PROVIDER === 'supabase') app.use(relayAfterResponse);
 
   // Unauthenticated
   app.use('/api/auth', authRouter);
   app.use('/api/webhooks', webhooksRouter);
   app.use('/api/public', publicRouter);
+  app.use('/api/cron', cronRouter); // CRON_SECRET-protected worker cycle (D-042)
 
   // Authenticated
   const api = Router();

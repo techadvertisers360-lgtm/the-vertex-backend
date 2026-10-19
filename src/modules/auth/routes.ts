@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { env } from '../../config/env';
 import { ValidationError } from '../../lib/errors';
@@ -17,6 +17,12 @@ const limiter = rateLimit({
   limit: env.NODE_ENV === 'test' ? 1000 : 20,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  // Behind proxies (Vercel) many users can share one apparent IP; keying by IP + identifier stops one person's
+  // failed attempts from locking everyone out while still capping guesses per account.
+  keyGenerator: (req) => {
+    const id = typeof req.body?.identifier === 'string' ? req.body.identifier.trim().toLowerCase().slice(0, 120) : '';
+    return `${ipKeyGenerator(req.ip ?? '')}|${id}`;
+  },
   message: { error: { code: 'RATE_LIMITED', message: 'Bohat zyada koshishein. 15 minute baad dobara try karein.' } },
 });
 

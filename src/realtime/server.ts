@@ -7,6 +7,7 @@ import { logger } from '../lib/misc';
 import { ACCESS_COOKIE, verifyAccessToken } from '../auth/tokens';
 import { resolveSession, type AuthUser } from '../middleware/auth';
 import { roleRoom, userRoom } from '../services/realtime';
+import { pruneRealtime, relayPending, type RealtimeTransport } from './relay';
 
 interface SocketData {
   user: AuthUser;
@@ -55,26 +56,21 @@ export function attachRealtime(httpServer: HttpServer, opts: { relayMs?: number;
     socket.emit('hello', { userId: user.id, role: user.role, unreadCount: unread });
   });
 
+  const transport: RealtimeTransport = {
+    name: 'socketio',
+    async send(events) {
+      for (const e of events) {
+        io.to(e.room).emit(e.event, e.payload);
+        if (e.event === 'session:revoked') io.in(e.room).disconnectSockets(true);
+      }
+    },
+  };
   let relaying = false;
   async function relayOnce(): Promise<number> {
     if (relaying) return 0;
     relaying = true;
     try {
-      const rows = await prisma.realtimeEvent.findMany({ where: { deliveredAt: null }, orderBy: { id: 'asc' }, take: 500 });
-      if (!rows.length) return 0;
-      for (const r of rows) {
-        if (r.event === 'session:revoked') {
-          // A stale backlog entry (API was down) must not kick a session created after it; the DB check
-          // in resolveSession already enforces revocation, so live kicks only matter while fresh.
-          if (Date.now() - r.createdAt.getTime() > 120_000) continue;
-          io.to(r.room).emit('session:revoked', r.payload);
-          io.in(r.room).disconnectSockets(true);
-        } else {
-          io.to(r.room).emit(r.event, r.payload);
-        }
-      }
-      await prisma.realtimeEvent.updateMany({ where: { id: { in: rows.map((r) => r.id) } }, data: { deliveredAt: new Date() } });
-      return rows.length;
+      return await relayPending(transport);
     } finally {
       relaying = false;
     }
@@ -98,10 +94,7 @@ export function attachRealtime(httpServer: HttpServer, opts: { relayMs?: number;
   const relayTimer = setInterval(() => void relayOnce().catch((err) => logger.error({ err }, 'realtime relay failed')), opts.relayMs ?? 1000);
   const revalidateTimer = setInterval(() => void revalidateOnce().catch((err) => logger.error({ err }, 'socket revalidation failed')), opts.revalidateMs ?? 60_000);
   // Delivered events are ephemeral; prune after a day.
-  const pruneTimer = setInterval(
-    () => void prisma.realtimeEvent.deleteMany({ where: { deliveredAt: { lt: new Date(Date.now() - 86400_000) } } }).catch(() => undefined),
-    3600_000,
-  );
+  const pruneTimer = setInterval(() => void pruneRealtime().catch(() => undefined), 3600_000);
 
   return {
     io,

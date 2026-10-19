@@ -70,7 +70,7 @@ export async function resolveSession(userId: string, sessionId: string, tokenVer
  */
 export function requireClientHeader(req: Request, _res: Response, next: NextFunction): void {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.path.startsWith('/uploadthing') || req.path.startsWith('/webhooks') || req.path.startsWith('/public')) {
+  if (req.path.startsWith('/uploadthing') || req.path.startsWith('/webhooks') || req.path.startsWith('/public') || req.path.startsWith('/cron')) {
     return next();
   }
   if (req.get('x-vh-client') !== 'web') {

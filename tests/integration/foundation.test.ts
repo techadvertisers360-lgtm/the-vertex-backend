@@ -8,6 +8,17 @@ import { agentFor, app, call, lastAudit, loginAs, makeUser, newKey, prisma, TEST
 import { sha256 } from '../../src/lib/misc';
 import { notifyUsers } from '../../src/services/notifications';
 
+describe('liveness', () => {
+  it('GET / says the API is running (no auth, no data); /health still answers', async () => {
+    const root = await request(app).get('/');
+    expect(root.status).toBe(200);
+    expect(root.body).toMatchObject({ status: 'ok', service: 'Vertex Health API' });
+    expect(Math.abs(Date.parse(root.body.time) - Date.now())).toBeLessThan(60_000);
+    expect(Object.keys(root.body).sort()).toEqual(['service', 'status', 'time']);
+    expect((await request(app).get('/health')).body).toEqual({ ok: true });
+  });
+});
+
 describe('auth & sessions (spec §2)', () => {
   it('login sets httpOnly cookies and /me returns role-specific nav from the server', async () => {
     const user = await makeUser('RECEPTIONIST');

@@ -4,7 +4,9 @@
 // clinical / financial / audit / history rows (enforced by services + DB triggers).
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // native = local dev; rhel-openssl-3.0.x = Vercel serverless (Node 20/22, Amazon Linux 2023)
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

@@ -10,17 +10,20 @@
     "start": "node dist/server.js",
     "start:worker": "node dist/worker.js",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src tests prisma",
+    "lint": "eslint src api tests prisma",
     "test": "vitest run tests/unit",
     "test:int": "vitest run --config vitest.int.config.mts",
     "seed": "tsx prisma/seed.ts",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "postinstall": "prisma generate",
+    "vercel-build": "prisma generate && tsc --noEmit -p tsconfig.json"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@vercel/functions": "^3.9.11",
     "bcryptjs": "^3.0.3",
     "cookie": "^1.1.1",
     "cookie-parser": "^1.4.7",
