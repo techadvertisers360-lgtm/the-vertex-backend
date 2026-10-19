@@ -14,7 +14,7 @@ describe('liveness', () => {
     expect(root.status).toBe(200);
     expect(root.body).toMatchObject({ status: 'ok', service: 'Vertex Health API' });
     expect(Math.abs(Date.parse(root.body.time) - Date.now())).toBeLessThan(60_000);
-    expect(Object.keys(root.body).sort()).toEqual(['service', 'status', 'time']);
+    expect(Object.keys(root.body).sort()).toEqual(['service', 'status', 'time', 'version']); // version = deployed commit (Vercel)
     expect((await request(app).get('/health')).body).toEqual({ ok: true });
   });
 });

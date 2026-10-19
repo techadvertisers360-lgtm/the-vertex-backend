@@ -86,7 +86,7 @@ export function createApp(): Express {
 
   // Root: lets anyone opening the deployed backend URL see the API is up (no data, no auth).
   app.get('/', (_req, res) => {
-    res.json({ status: 'ok', service: 'Vertex Health API', time: new Date().toISOString() });
+    res.json({ status: 'ok', service: 'Vertex Health API', version: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local', time: new Date().toISOString() });
   });
 
   // UploadThing parses its own body and receives server callbacks without cookies; auth runs inside its middleware.

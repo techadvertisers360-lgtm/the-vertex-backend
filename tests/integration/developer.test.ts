@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { env } from '../../src/config/env';
+import { errorHandler } from '../../src/middleware/error';
 import { agentFor, app, call, loginAs, makeUser, prisma, TEST_PASSWORD, uid, type Agent } from './helpers';
 
 /** D-043 — hidden developer: manages every account, never listed, "view as" any staff user read-only. */
@@ -165,7 +166,6 @@ describe('D-043 — "view as": their tabs, data and live channel, read-only, aud
 
 describe('D-045 — unexpected server errors reach the developer', () => {
   it('a 500 answers the user generically and records who hit which endpoint', async () => {
-    const { errorHandler } = await import('../../src/middleware/error');
     const u = await makeUser('RECEPTIONIST');
     const res = { statusCode: 0, body: null as unknown, status(c: number) { this.statusCode = c; return this; }, json(b: unknown) { this.body = b; return this; } };
     const req = { method: 'GET', baseUrl: '/api/reception', path: '/tracker', route: { path: '/tracker' }, originalUrl: '/api/reception/tracker?x=1', requestId: `rq-${uid()}`, ip: '127.0.0.1', actor: { id: u.id, role: 'RECEPTIONIST', displayName: u.displayName } };
