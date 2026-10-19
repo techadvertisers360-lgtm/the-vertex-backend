@@ -26,11 +26,11 @@ const newAccount = (role: string, extra: Record<string, unknown> = {}) => ({
 });
 
 describe('D-043 — developer manages every account', () => {
-  it('creates leadership and staff accounts, edits and disables them; new accounts must change their password', async () => {
+  it('creates leadership and staff accounts, edits and disables them; passwords stay as given', async () => {
     for (const role of ['MD', 'MANAGER', 'MARKETING_DIRECTOR', 'MARKETING_LEAD', 'RECEPTIONIST', 'ASSISTANT', 'OFFICE_BOY', 'LEAD_MEMBER']) {
       const r = await devApi.post('/api/users', newAccount(role));
       expect(r.status, role).toBe(201);
-      expect(r.body).toMatchObject({ role, mustChangePassword: true });
+      expect(r.body).toMatchObject({ role, mustChangePassword: false });
     }
     const doc = await devApi.post('/api/users', newAccount('DOCTOR', { specialty: 'Dermatology' }));
     expect(doc.status).toBe(201);
@@ -65,28 +65,50 @@ describe('D-043 — developer manages every account', () => {
   });
 });
 
-describe('D-043 — temporary password and changing my own password', () => {
-  it('a temporary password ends sessions and forces a change; the change needs the current password', async () => {
+describe('D-044 — only the developer creates accounts and sets passwords (Hamza / MD keep adding Lead members)', () => {
+  it('MD, Manager and Hamza cannot create staff accounts; Hamza and the MD still add Lead members', async () => {
+    const md = call((await agentFor('MD')).agent);
+    const mgr = call((await agentFor('MANAGER')).agent);
+    const hamza = call((await agentFor('MARKETING_DIRECTOR')).agent);
+    for (const api of [md, mgr]) expect((await api.post('/api/users', newAccount('RECEPTIONIST'))).status).toBe(403);
+    expect((await md.post('/api/users', newAccount('MANAGER'))).status).toBe(403);
+    expect((await hamza.post('/api/users', newAccount('LEAD_MEMBER'))).status).toBe(201);
+    expect((await md.post('/api/users', newAccount('LEAD_MEMBER'))).status).toBe(201);
+    expect((await mgr.post('/api/users', newAccount('LEAD_MEMBER'))).status).toBe(403);
+    const lm = await hamza.post('/api/lead-admin/members', { displayName: `LM ${uid()}`, email: `${uid()}@test.local`, password: TEST_PASSWORD });
+    expect(lm.status).toBe(201);
+    expect(lm.body.mustChangePassword).toBe(false);
+  });
+
+  it('the developer sets a password: it works as given, old sessions end; nobody else can set or change one', async () => {
     const u = await makeUser('RECEPTIONIST');
     const old = await loginAs(u.email!);
-    const set = await devApi.post(`/api/users/${u.id}/password`, { password: 'Temp-pass-456' });
+    const set = await devApi.post(`/api/users/${u.id}/password`, { password: 'Given-pass-456' });
     expect(set.status).toBe(200);
     expect((await call(old).get('/api/me')).status).toBe(401); // old session ended
     expect((await request(app).post('/api/auth/login').set('x-vh-client', 'web').send({ identifier: u.email, password: TEST_PASSWORD })).status).toBe(401);
 
-    const agent = await loginAs(u.email!, 'Temp-pass-456');
-    const api = call(agent);
-    expect((await api.get('/api/me')).body.user.mustChangePassword).toBe(true);
-    expect((await api.post('/api/me/password', { currentPassword: 'wrong-one-1', newPassword: 'Mine-pass-789' })).status).toBe(422);
-    expect((await api.post('/api/me/password', { currentPassword: 'Temp-pass-456', newPassword: 'short' })).status).toBe(422);
-    const ok = await api.post('/api/me/password', { currentPassword: 'Temp-pass-456', newPassword: 'Mine-pass-789' });
-    expect(ok.status).toBe(200);
-    expect((await api.get('/api/me')).body.user.mustChangePassword).toBe(false); // still signed in with the fresh session
-    expect((await request(app).post('/api/auth/login').set('x-vh-client', 'web').send({ identifier: u.email, password: 'Temp-pass-456' })).status).toBe(401);
-    await loginAs(u.email!, 'Mine-pass-789');
-    expect(await prisma.auditEvent.count({ where: { action: 'PASSWORD_CHANGED', recordId: u.id } })).toBe(1);
+    const api = call(await loginAs(u.email!, 'Given-pass-456'));
+    expect((await api.get('/api/me')).body.user.mustChangePassword).toBe(false); // no forced change
+    const own = await api.post('/api/me/password', { currentPassword: 'Given-pass-456', newPassword: 'Mine-pass-789' });
+    expect(own.status).toBe(403);
+    expect(own.body.error.code).toBe('PASSWORD_ADMIN_ONLY');
+    await loginAs(u.email!, 'Given-pass-456'); // unchanged
+
+    for (const role of ['MD', 'MANAGER', 'MARKETING_DIRECTOR'] as const) {
+      expect((await call((await agentFor(role)).agent).post(`/api/users/${u.id}/password`, { password: 'Other-pass-111' })).status).toBe(403);
+    }
     const setEv = await prisma.auditEvent.findFirstOrThrow({ where: { action: 'USER_PASSWORD_SET', recordId: u.id } });
-    expect(JSON.stringify(setEv, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).not.toContain('Temp-pass-456');
+    expect(JSON.stringify(setEv, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).not.toContain('Given-pass-456');
+  });
+
+  it('the developer can change their own password (current one required)', async () => {
+    const d = await agentFor('DEVELOPER');
+    const api = call(d.agent);
+    expect((await api.post('/api/me/password', { currentPassword: 'wrong-one-1', newPassword: 'Dev-pass-789' })).status).toBe(422);
+    expect((await api.post('/api/me/password', { currentPassword: TEST_PASSWORD, newPassword: 'Dev-pass-789' })).status).toBe(200);
+    expect((await api.get('/api/me')).status).toBe(200); // still signed in
+    await loginAs(d.user.email!, 'Dev-pass-789');
   });
 });
 

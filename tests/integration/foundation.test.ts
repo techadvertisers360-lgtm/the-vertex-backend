@@ -82,30 +82,17 @@ describe('auth & sessions (spec §2)', () => {
     expect(active).toBe(0);
   });
 
-  it('forgot/reset: token is hashed at rest, single-use, and revokes sessions', async () => {
+  it('D-044: self-service password reset is off — forgot / reset refuse and send nothing', async () => {
     const user = await makeUser('DOCTOR');
     await prisma.user.update({ where: { id: user.id }, data: { phone: '92300' + String(Date.now()).slice(-7) } });
-    const before = await loginAs(user.email!);
-    const res = await request(app).post('/api/auth/forgot').set('x-vh-client', 'web').send({ identifier: user.email });
-    expect(res.status).toBe(200);
-    const msg = await prisma.messageOutbox.findFirst({ where: { recipientUserId: user.id, template: 'password_reset' } });
-    const link = (msg!.payload as { link: string }).link;
-    const token = new URL(link).searchParams.get('token')!;
-    const row = await prisma.passwordResetToken.findFirst({ where: { userId: user.id, usedAt: null } });
-    expect(row!.tokenHash).toBe(sha256(token)); // never stored in plaintext
-    expect(row!.tokenHash).not.toContain(token);
-
-    const ok = await request(app).post('/api/auth/reset').set('x-vh-client', 'web').send({ token, password: 'NewPass123' });
-    expect(ok.status).toBe(200);
-    const reuse = await request(app).post('/api/auth/reset').set('x-vh-client', 'web').send({ token, password: 'Other1234' });
-    expect(reuse.body.error.code).toBe('RESET_TOKEN_INVALID');
-    expect((await call(before).get('/api/me')).status).toBe(401);
-    await loginAs(user.email!, 'NewPass123');
-  });
-
-  it('unknown identifier on forgot still returns 200 (no enumeration)', async () => {
-    const res = await request(app).post('/api/auth/forgot').set('x-vh-client', 'web').send({ identifier: 'nobody@nowhere.test' });
-    expect(res.status).toBe(200);
+    const forgot = await request(app).post('/api/auth/forgot').set('x-vh-client', 'web').send({ identifier: user.email });
+    expect(forgot.status).toBe(403);
+    expect(forgot.body.error.code).toBe('PASSWORD_ADMIN_ONLY');
+    expect(await prisma.messageOutbox.count({ where: { recipientUserId: user.id, template: 'password_reset' } })).toBe(0);
+    expect(await prisma.passwordResetToken.count({ where: { userId: user.id } })).toBe(0);
+    const reset = await request(app).post('/api/auth/reset').set('x-vh-client', 'web').send({ token: 'x'.repeat(40), password: 'NewPass123' });
+    expect(reset.status).toBe(403);
+    await loginAs(user.email!); // the given password still works
   });
 
   it('state-changing requests without the client header are rejected (CSRF guard)', async () => {

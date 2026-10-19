@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Role } from '@prisma/client';
 import { idParam, route } from '../../middleware/route';
-import { createUser, listUsers, setTemporaryPassword, updateUser } from './service';
+import { createUser, listUsers, setPassword, updateUser } from './service';
 
 export const usersRouter = Router();
 
@@ -61,10 +61,10 @@ usersRouter.patch(
   ),
 );
 
-/** Temporary password for someone else (they must change it at next sign-in). */
+/** Set someone's password — the developer only (D-044); it stays as given. */
 usersRouter.post(
   '/:id/password',
-  route({ permission: ['users:manage', 'leads:admin'], params: idParam, body: z.object({ password: z.string().min(8).max(200) }) }, async ({ actor, params, body }) =>
-    setTemporaryPassword(actor, params.id, body.password),
+  route({ permission: 'developer:console', params: idParam, body: z.object({ password: z.string().min(8).max(200) }) }, async ({ actor, params, body }) =>
+    setPassword(actor, params.id, body.password),
   ),
 );

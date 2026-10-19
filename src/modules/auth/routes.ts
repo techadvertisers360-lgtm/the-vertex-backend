@@ -40,7 +40,8 @@ function profile(
   viewAs?: { by: string } | null,
 ) {
   return {
-    user: { id: user.id, displayName: user.displayName, role: user.role, title: user.title, email: user.email, phone: user.phone, memberCode: user.memberCode, mustChangePassword: viewAs ? false : user.mustChangePassword },
+    // Only the developer may be asked to change a password (D-044); everyone else keeps the one they were given.
+    user: { id: user.id, displayName: user.displayName, role: user.role, title: user.title, email: user.email, phone: user.phone, memberCode: user.memberCode, mustChangePassword: !viewAs && user.role === 'DEVELOPER' && user.mustChangePassword },
     /** Developer "view as" (D-043): the screens are this user's, read-only. */
     viewAs: viewAs ?? null,
     permissions: ROLE_PERMISSIONS[user.role],
@@ -84,18 +85,16 @@ authRouter.post('/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
-authRouter.post('/forgot', limiter, async (req, res) => {
-  const { identifier } = body(z.object({ identifier: z.string().min(3).max(120) }), req);
-  await auth.requestPasswordReset(identifier, meta(req));
-  res.json({ ok: true, message: 'Agar yeh account mojood hai to registered phone par reset link bhej diya gaya hai.' });
-});
-
-authRouter.post('/reset', limiter, async (req, res) => {
-  const { token, password } = body(z.object({ token: z.string().min(20).max(200), password: z.string().min(8).max(200) }), req);
-  await auth.resetPassword(token, password, meta(req));
-  clearAuthCookies(res);
-  res.json({ ok: true });
-});
+/**
+ * Self-service password reset is switched off by the clinic (D-044): passwords are issued and changed only by the
+ * developer. Both endpoints answer 403 with the instruction instead of sending or accepting reset links.
+ */
+export const PASSWORD_ADMIN_ONLY_MSG = 'Password sirf administrator (Developer) set ya badal sakta hai — un se rabta karein.';
+const passwordAdminOnly = (_req: Request, res: import('express').Response) => {
+  res.status(403).json({ error: { code: 'PASSWORD_ADMIN_ONLY', message: PASSWORD_ADMIN_ONLY_MSG } });
+};
+authRouter.post('/forgot', limiter, passwordAdminOnly);
+authRouter.post('/reset', limiter, passwordAdminOnly);
 
 export const meRouter = Router();
 meRouter.get('/', requireAuth, async (req, res) => {
@@ -103,8 +102,12 @@ meRouter.get('/', requireAuth, async (req, res) => {
   res.json(toJsonSafe(profile(user, req.user!.impersonator ? { by: 'Developer' } : null)));
 });
 
-/** Change my own password (current + new). Not available while viewing as someone (requireAuth is read-only then). */
+/** Change my own password (current + new) — the developer only (D-044); refused while viewing as someone. */
 meRouter.post('/password', requireAuth, async (req, res) => {
+  if (req.user!.role !== 'DEVELOPER') {
+    passwordAdminOnly(req, res);
+    return;
+  }
   const input = body(z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8).max(200) }), req);
   const session = await auth.changeOwnPassword(req.user!.id, req.user!.sessionId, input, meta(req));
   setAuthCookies(res, session.accessToken, session.refreshToken, session.refreshExpires);

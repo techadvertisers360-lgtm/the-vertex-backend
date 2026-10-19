@@ -74,6 +74,9 @@ export interface CreateUserInput {
 }
 
 export async function createUser(actor: Actor, input: CreateUserInput) {
+  // Client rule (D-044): accounts (and their passwords) come from the developer — except Lead members, which Hamza
+  // Zafar and the MD keep adding with a first password as before (spec §2/§16; checked in assertCanManageRole).
+  if (actor.role !== 'DEVELOPER' && input.role !== 'LEAD_MEMBER') deny('User', undefined, 'users:create_developer_only');
   await assertCanManageRole(actor, input.role);
   validatePasswordStrength(input.password);
   const phone = input.phone ? normalizePhone(input.phone) : null;
@@ -91,8 +94,8 @@ export async function createUser(actor: Actor, input: CreateUserInput) {
           memberCode: input.memberCode?.toUpperCase() ?? null,
           title: input.title ?? null,
           passwordHash,
-          // The admin knows this first password, so the person must choose their own at first sign-in (D-043).
-          mustChangePassword: true,
+          // Passwords are issued by the developer and kept as given (D-044) — nobody is asked to change them.
+          mustChangePassword: false,
           createdById: actor.id,
         },
         select: publicUser,
@@ -160,10 +163,11 @@ export async function updateUser(actor: Actor, id: string, input: UpdateUserInpu
 }
 
 /**
- * Admin sets a temporary password (D-043): the person must choose their own at next sign-in; all their sessions end.
- * Same authority as editing the account (assertCanManageRole). The password itself is never stored or audited.
+ * The developer sets someone's password (D-044): it stays as given (no forced change); all their sessions end.
+ * Nobody else can set any password. The password itself is never stored in clear or audited.
  */
-export async function setTemporaryPassword(actor: Actor, id: string, password: string) {
+export async function setPassword(actor: Actor, id: string, password: string) {
+  if (actor.role !== 'DEVELOPER') deny('User', id, 'users:password_developer_only');
   const target = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
   if (!target) throw new NotFoundError('User');
   if (id === actor.id) throw new ValidationError('Apna password "Password badlein" se badlein.');
@@ -171,10 +175,10 @@ export async function setTemporaryPassword(actor: Actor, id: string, password: s
   validatePasswordStrength(password);
   const passwordHash = await hashPassword(password);
   await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true, tokenVersion: { increment: 1 } } });
+    await tx.user.update({ where: { id }, data: { passwordHash, mustChangePassword: false, tokenVersion: { increment: 1 } } });
     await tx.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
     await publish(tx, [userRoom(id)], 'session:revoked', { reason: 'PASSWORD_RESET' });
-    await audit(tx, actor, { action: 'USER_PASSWORD_SET', recordType: 'User', recordId: id, after: { mustChangePassword: true } });
+    await audit(tx, actor, { action: 'USER_PASSWORD_SET', recordType: 'User', recordId: id });
   });
-  return { id, mustChangePassword: true };
+  return { id };
 }
