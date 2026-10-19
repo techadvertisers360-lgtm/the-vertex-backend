@@ -47,11 +47,24 @@ const schema = z.object({
   DATABASE_CA_CERT: z.string().optional(),
   /** Express "trust proxy" (hops or true). Behind Vercel use "true". */
   TRUST_PROXY: z.string().default('1'),
+  /**
+   * Web Push (VAPID, D-046): phone / desktop notifications while the app is closed. Generate once with
+   * `npx web-push generate-vapid-keys`. All three set = push on; any missing = push off (in-app alerts still work).
+   * VAPID_SUBJECT is a contact for the push services: `mailto:you@example.com` or an https URL.
+   */
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().regex(/^(mailto:|https:\/\/)/, 'VAPID_SUBJECT must start with mailto: or https://').optional(),
   LOG_LEVEL: z.string().default('info'),
 });
 
 const parsed = schema
   .superRefine((e, ctx) => {
+    const vapid = [e.VAPID_PUBLIC_KEY, e.VAPID_PRIVATE_KEY, e.VAPID_SUBJECT].filter(Boolean).length;
+    if (vapid > 0 && vapid < 3)
+      for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'] as const) {
+        if (!e[k]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [k], message: `${k} is required when any VAPID_* variable is set` });
+      }
     if (e.REALTIME_PROVIDER === 'supabase') {
       for (const k of ['SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'SUPABASE_JWT_SECRET'] as const) {
         if (!e[k]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [k], message: `${k} is required when REALTIME_PROVIDER=supabase` });

@@ -27,6 +27,8 @@ import { messagesRouter } from './modules/messaging/routes';
 import { cronRouter, realtimeRouter } from './modules/platform/routes';
 import { developerRouter } from './modules/developer/routes';
 import { relayAfterResponse } from './realtime/afterResponse';
+import { pushRouter } from './modules/push/routes';
+import { pushEnabled } from './services/push';
 
 /**
  * Authenticated routers in mount order (all behind requireAuth). Exported so the authorization test can walk every
@@ -35,6 +37,7 @@ import { relayAfterResponse } from './realtime/afterResponse';
 export const API_MOUNTS: [string, Router][] = [
   ['/me', meRouter],
   ['/notifications', notificationsRouter],
+  ['/push', pushRouter],
   ['/settings', settingsRouter],
   ['/users', usersRouter],
   ['/files', filesRouter],
@@ -95,7 +98,8 @@ export function createApp(): Express {
   app.use(express.json({ limit: '1mb' }));
   app.use('/api', requireClientHeader);
   // Serverless (Supabase realtime): deliver what this request published once its transaction has committed.
-  if (env.REALTIME_PROVIDER === 'supabase') app.use(relayAfterResponse);
+  // Serverless relays run after the response: Supabase live events and/or Web Push (D-042, D-046).
+  if (env.REALTIME_PROVIDER === 'supabase' || pushEnabled()) app.use(relayAfterResponse);
 
   // Unauthenticated
   app.use('/api/auth', authRouter);

@@ -37,7 +37,7 @@ async function tick(req: Request, res: import('express').Response) {
     budgetMs: 25_000, // fits cron-job.org's 30 s request timeout; leftovers continue next minute
     transport: env.REALTIME_PROVIDER === 'supabase' ? supabaseTransport() : undefined,
   });
-  if (result.jobs || result.messages || result.sheetsSynced || result.realtime) logger.info(result, 'cron tick');
+  if (result.jobs || result.messages || result.sheetsSynced || result.realtime || result.pushed) logger.info(result, 'cron tick');
   res.json({ ok: true, ...result });
 }
 /**
@@ -82,7 +82,7 @@ cronRouter.get('/health', async (req, res) => {
       urlHasSslaccept: /[?&]sslaccept=/.test(url),
     },
     settings: Object.fromEntries(
-      ['JWT_ACCESS_SECRET', 'FRONTEND_ORIGIN', 'PUBLIC_APP_URL', 'COOKIE_SECURE', 'TRUST_PROXY', 'REALTIME_PROVIDER', 'SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'SUPABASE_JWT_SECRET', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'UPLOADTHING_TOKEN'].map((k) => [k, !!process.env[k]]),
+      ['JWT_ACCESS_SECRET', 'FRONTEND_ORIGIN', 'PUBLIC_APP_URL', 'COOKIE_SECURE', 'TRUST_PROXY', 'REALTIME_PROVIDER', 'SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'SUPABASE_JWT_SECRET', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'UPLOADTHING_TOKEN', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'].map((k) => [k, !!process.env[k]]),
     ),
     realtime: env.REALTIME_PROVIDER,
     node: process.version,

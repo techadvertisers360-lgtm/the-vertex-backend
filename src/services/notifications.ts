@@ -116,6 +116,14 @@ export async function listNotifications(userId: string, filter: ReadFilter, limi
   };
 }
 
+/** One of my notifications (the push tap opens it, D-046). Someone else's is reported as not found. */
+export async function getNotification(userId: string, id: string) {
+  const n = await prisma.notification.findUnique({ where: { id }, select: { id: true, recipientId: true, type: true, subject: true, recordType: true, recordId: true, readAt: true } });
+  if (!n || n.recipientId !== userId) throw new NotFoundError('Notification');
+  const { recipientId: _r, ...rest } = n;
+  return rest;
+}
+
 export async function markRead(userId: string, id: string): Promise<void> {
   const n = await prisma.notification.findUnique({ where: { id } });
   // Another user's notification is reported as not found (no existence leak).

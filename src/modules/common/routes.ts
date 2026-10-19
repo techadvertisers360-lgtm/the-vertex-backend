@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { idParam, paging, route } from '../../middleware/route';
-import { listNotifications, markAllRead, markRead } from '../../services/notifications';
+import { getNotification, listNotifications, markAllRead, markRead } from '../../services/notifications';
 import { listSettings, updateSetting } from '../../services/settings';
 
 export const notificationsRouter = Router();
@@ -13,6 +13,8 @@ notificationsRouter.get(
     async ({ user, query }) => listNotifications(user.id, query.filter, query.limit, query.cursor),
   ),
 );
+
+notificationsRouter.get('/:id', route({ permission: 'notifications:own', params: idParam }, async ({ user, params }) => getNotification(user.id, params.id)));
 
 notificationsRouter.post(
   '/:id/read',

@@ -8,6 +8,7 @@ import { ACCESS_COOKIE, verifyAccessToken } from '../auth/tokens';
 import { resolveSession, type AuthUser } from '../middleware/auth';
 import { roleRoom, userRoom } from '../services/realtime';
 import { pruneRealtime, relayPending, type RealtimeTransport } from './relay';
+import { drainPush } from '../services/push';
 
 interface SocketData {
   user: AuthUser;
@@ -92,6 +93,8 @@ export function attachRealtime(httpServer: HttpServer, opts: { relayMs?: number;
   }
 
   const relayTimer = setInterval(() => void relayOnce().catch((err) => logger.error({ err }, 'realtime relay failed')), opts.relayMs ?? 1000);
+  // Web Push to phones (D-046) from the same outbox, independent of the socket relay.
+  const pushTimer = setInterval(() => void drainPush(4_000), opts.relayMs ? Math.max(opts.relayMs, 2000) : 2000);
   const revalidateTimer = setInterval(() => void revalidateOnce().catch((err) => logger.error({ err }, 'socket revalidation failed')), opts.revalidateMs ?? 60_000);
   // Delivered events are ephemeral; prune after a day.
   const pruneTimer = setInterval(() => void pruneRealtime().catch(() => undefined), 3600_000);
@@ -102,6 +105,7 @@ export function attachRealtime(httpServer: HttpServer, opts: { relayMs?: number;
     revalidateOnce,
     close: async () => {
       clearInterval(relayTimer);
+      clearInterval(pushTimer);
       clearInterval(revalidateTimer);
       clearInterval(pruneTimer);
       await new Promise<void>((resolve) => io.close(() => resolve()));

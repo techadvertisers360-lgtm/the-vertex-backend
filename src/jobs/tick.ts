@@ -1,6 +1,7 @@
 import { logger } from '../lib/misc';
 import { runSheetSync } from '../modules/leadSync/service';
 import { drainRealtime, pruneRealtime, type RealtimeTransport } from '../realtime/relay';
+import { drainPush } from '../services/push';
 import { registerAllJobs, runWatchersOnce } from './index';
 import { recoverStuckMessages, runOutboxOnce } from './outbox';
 import { recoverStuckJobs, runDueJobsOnce } from './runner';
@@ -18,6 +19,7 @@ export interface TickResult {
   messages: number;
   sheetsSynced: number;
   realtime: number;
+  pushed: number;
   pruned: number;
   stoppedEarly: boolean;
 }
@@ -32,7 +34,7 @@ export async function runTick(opts: { workerId: string; budgetMs?: number; trans
   const started = Date.now();
   const deadline = started + (opts.budgetMs ?? 45_000);
   const left = () => deadline - Date.now();
-  const r: TickResult = { ms: 0, watchers: 'ok', jobs: 0, messages: 0, sheetsSynced: 0, realtime: 0, pruned: 0, stoppedEarly: false };
+  const r: TickResult = { ms: 0, watchers: 'ok', jobs: 0, messages: 0, sheetsSynced: 0, realtime: 0, pushed: 0, pruned: 0, stoppedEarly: false };
 
   await recoverStuckJobs();
   await recoverStuckMessages();
@@ -47,6 +49,7 @@ export async function runTick(opts: { workerId: string; budgetMs?: number; trans
     }
   }
   if (opts.transport) r.realtime = await drainRealtime(opts.transport, Math.max(1_000, Math.min(10_000, left())));
+  r.pushed = await drainPush(Math.max(1_000, Math.min(8_000, left())));
   r.pruned = await pruneRealtime();
   r.stoppedEarly = left() <= 5_000;
   r.ms = Date.now() - started;

@@ -93,6 +93,32 @@ stock alerts, message outbox with retries, Google Sheets sync, realtime relay). 
 duplicate or overlapping call never sends twice. Timing granularity becomes one minute (e.g. the 2-minute
 auto-send to Reception can fire up to a minute later).
 
+## 4b. Phone notifications (Web Push, D-046)
+
+Free, standard Web Push — no paid service. Generate the keys **once** (keep them; changing them later means every
+phone has to switch notifications on again):
+
+```bash
+cd backend
+npx web-push generate-vapid-keys
+```
+
+Add to the **backend** Vercel project → Settings → Environment Variables (Production), then **Redeploy**:
+
+| Name | Value |
+|---|---|
+| `VAPID_PUBLIC_KEY` | the "Public Key" line |
+| `VAPID_PRIVATE_KEY` | the "Private Key" line (secret — never in the frontend or in git) |
+| `VAPID_SUBJECT` | `mailto:` + a clinic contact email (or an `https://` site URL) |
+
+All three or none (with only some set the API refuses to start and names the missing ones). The frontend needs no new
+variable — it reads the public key from `GET /api/push/config`. Pushes are sent after each request and by the
+cron tick, so the cron-job.org job (section 4) should be running.
+
+Each person then: signs in → **On karein** on the blue card (or the 🔔 bell-ring icon → *Phone notifications* →
+switch on) → **Send test notification**. iPhone: notifications work only in the app added to the Home Screen
+(Safari → Share → Add to Home Screen, iOS 16.4+), opened from there.
+
 ## 5. Check it works
 
 1. Sign in on the frontend URL as the Manager → the header shows **Live**.

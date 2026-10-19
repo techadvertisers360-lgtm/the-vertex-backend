@@ -317,12 +317,13 @@ model User {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  createdBy     User?                @relation("UserCreatedBy", fields: [createdById], references: [id])
-  createdUsers  User[]               @relation("UserCreatedBy")
-  sessions      Session[]
-  resetTokens   PasswordResetToken[]
-  doctorProfile DoctorProfile?
-  leadProfile   LeadMemberProfile?
+  createdBy         User?                @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers      User[]               @relation("UserCreatedBy")
+  sessions          Session[]
+  pushSubscriptions PushSubscription[]
+  resetTokens       PasswordResetToken[]
+  doctorProfile     DoctorProfile?
+  leadProfile       LeadMemberProfile?
 
   @@index([role, active])
   @@map("users")
@@ -1699,7 +1700,30 @@ model RealtimeEvent {
   payload     Json
   createdAt   DateTime  @default(now())
   deliveredAt DateTime?
+  /// Web Push relay (D-046): set once `notification:new` was pushed to the recipient's devices (or skipped).
+  pushedAt    DateTime?
 
   @@index([deliveredAt, id])
+  @@index([event, pushedAt, id])
   @@map("realtime_events")
+}
+
+/// One browser / phone that accepted Web Push for a user (D-046). Several per user; dead ones are removed.
+model PushSubscription {
+  id            String    @id @default(cuid())
+  userId        String
+  /// sha256 of the endpoint — the endpoint URL itself can exceed an index's length.
+  endpointHash  String    @unique @db.Char(64)
+  endpoint      String    @db.Text
+  p256dh        String    @db.VarChar(255)
+  auth          String    @db.VarChar(255)
+  userAgent     String?   @db.VarChar(255)
+  createdAt     DateTime  @default(now())
+  lastSuccessAt DateTime?
+  failures      Int       @default(0)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("push_subscriptions")
 }
