@@ -27,7 +27,14 @@ export async function today(actor: Actor) {
   return prisma.attendance.findUnique({ where: { userId_date: { userId: actor.id!, date: clinicDate(new Date()) } } });
 }
 
+/** Check-in / check-out switched off for this person by the developer (D-049): the app treats them as on duty. */
+async function assertAttendanceOn(actor: Actor) {
+  const u = await prisma.user.findUnique({ where: { id: actor.id! }, select: { attendanceRequired: true } });
+  if (u && !u.attendanceRequired) throw new ConflictError('ATTENDANCE_OFF', 'Aap ke liye check-in / check-out band hai — iski zaroorat nahi.');
+}
+
 export async function checkIn(actor: Actor) {
+  await assertAttendanceOn(actor);
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const date = clinicDate(now);
@@ -53,6 +60,7 @@ export async function checkIn(actor: Actor) {
 }
 
 export async function checkOut(actor: Actor) {
+  await assertAttendanceOn(actor);
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const a = await tx.attendance.findUnique({ where: { userId_date: { userId: actor.id!, date: clinicDate(now) } } });

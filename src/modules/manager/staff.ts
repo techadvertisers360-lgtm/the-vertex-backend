@@ -17,7 +17,7 @@ export async function staffToday() {
   const today = clinicDate(new Date());
   const attendance = await prisma.attendance.findMany({ where: { date: today } });
   const [users, reviews, rooms, assignments, tasks] = await Promise.all([
-    prisma.user.findMany({ where: { active: true, role: { in: REVIEWED_ROLES } }, select: { id: true, displayName: true, role: true, memberCode: true }, orderBy: [{ role: 'asc' }, { displayName: 'asc' }] }),
+    prisma.user.findMany({ where: { active: true, role: { in: REVIEWED_ROLES } }, select: { id: true, displayName: true, role: true, memberCode: true, attendanceRequired: true }, orderBy: [{ role: 'asc' }, { displayName: 'asc' }] }),
     prisma.staffReview.findMany({ where: { attendanceId: { in: attendance.map((a) => a.id) } } }),
     prisma.room.findMany({ select: { id: true, code: true } }),
     prisma.roomAssignment.findMany({ where: { date: today, unassignedAt: null } }),

@@ -55,6 +55,7 @@ usersRouter.patch(
         email: z.string().email().max(120).nullable().optional(),
         phone: z.string().min(7).max(20).nullable().optional(),
         title: z.string().max(120).nullable().optional(),
+        attendanceRequired: z.boolean().optional(),
       }),
     },
     async ({ actor, params, body }) => updateUser(actor, params.id, body),

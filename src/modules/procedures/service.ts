@@ -199,12 +199,14 @@ export async function assignOptions(planItemId: string) {
   const until = addMinutes(now, durationMin);
   const today = clinicDate(now);
   const [assistants, rooms, busy, ownBooking] = await Promise.all([
-    prisma.user.findMany({ where: { role: 'ASSISTANT', active: true }, select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { role: 'ASSISTANT', active: true }, select: { id: true, displayName: true, attendanceRequired: true } }),
     prisma.room.findMany({ where: { kind: 'PROCEDURE', active: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, code: true, name: true } }),
     busyRoomIds(prisma, now, until),
     prisma.appointment.findUnique({ where: { treatmentPlanItemId: planItemId }, select: { id: true, roomId: true } }),
   ]);
-  const onDuty = await prisma.attendance.findMany({ where: { date: today, userId: { in: assistants.map((a) => a.id) }, checkOutAt: null }, select: { userId: true } });
+  // On duty = checked in and not out, or check-in switched off for them (D-049).
+  const checkedIn = await prisma.attendance.findMany({ where: { date: today, userId: { in: assistants.map((a) => a.id) }, checkOutAt: null }, select: { userId: true } });
+  const onDuty = [...checkedIn, ...assistants.filter((a) => !a.attendanceRequired).map((a) => ({ userId: a.id }))];
   const busyAssistants = await prisma.procedureTask.findMany({ where: { assistantId: { in: assistants.map((a) => a.id) }, status: { in: [...ACTIVE_TASK] } }, select: { assistantId: true } });
   return {
     durationMin,
@@ -255,10 +257,10 @@ export async function assign(actor: Actor, input: { planItemId: string; assistan
       if (!appointment || !['CHECKED_IN', 'WAITING'].includes(appointment.status)) throw new ConflictError('NOT_CHECKED_IN', 'Session ka patient pehle check-in ho.');
     }
 
-    const assistant = await tx.user.findUnique({ where: { id: input.assistantId }, select: { id: true, role: true, active: true, displayName: true } });
+    const assistant = await tx.user.findUnique({ where: { id: input.assistantId }, select: { id: true, role: true, active: true, displayName: true, attendanceRequired: true } });
     if (!assistant || assistant.role !== 'ASSISTANT' || !assistant.active) throw new ValidationError('Assistant nahi mila.');
     const now = new Date();
-    if (!(await tx.attendance.findFirst({ where: { userId: assistant.id, date: clinicDate(now), checkOutAt: null } }))) throw new ConflictError('ASSISTANT_NOT_ON_DUTY', `${assistant.displayName} ne aaj check-in nahi kiya.`);
+    if (assistant.attendanceRequired && !(await tx.attendance.findFirst({ where: { userId: assistant.id, date: clinicDate(now), checkOutAt: null } }))) throw new ConflictError('ASSISTANT_NOT_ON_DUTY', `${assistant.displayName} ne aaj check-in nahi kiya.`);
     if (await tx.procedureTask.findFirst({ where: { assistantId: assistant.id, status: { in: [...ACTIVE_TASK] } } })) throw new ConflictError('ASSISTANT_BUSY', `${assistant.displayName} abhi doosre procedure par hain.`);
 
     const room = await tx.room.findUnique({ where: { id: input.roomId } });
@@ -516,9 +518,9 @@ export async function replaceAssistant(actor: Actor, taskId: string, newAssistan
     if (!t) throw new NotFoundError('Procedure task');
     if (!ACTIVE_TASK.includes(t.status as (typeof ACTIVE_TASK)[number])) throw new ConflictError('TASK_CLOSED', 'Task active nahi.');
     if (t.assistantId === newAssistantId) throw new ValidationError('Naya Assistant chunein.');
-    const a = await tx.user.findUnique({ where: { id: newAssistantId }, select: { role: true, active: true, displayName: true } });
+    const a = await tx.user.findUnique({ where: { id: newAssistantId }, select: { role: true, active: true, displayName: true, attendanceRequired: true } });
     if (!a || a.role !== 'ASSISTANT' || !a.active) throw new ValidationError('Assistant nahi mila.');
-    if (!(await tx.attendance.findFirst({ where: { userId: newAssistantId, date: clinicDate(new Date()), checkOutAt: null } }))) throw new ConflictError('ASSISTANT_NOT_ON_DUTY', `${a.displayName} ne aaj check-in nahi kiya.`);
+    if (a.attendanceRequired && !(await tx.attendance.findFirst({ where: { userId: newAssistantId, date: clinicDate(new Date()), checkOutAt: null } }))) throw new ConflictError('ASSISTANT_NOT_ON_DUTY', `${a.displayName} ne aaj check-in nahi kiya.`);
     if (await tx.procedureTask.findFirst({ where: { assistantId: newAssistantId, status: { in: [...ACTIVE_TASK] } } })) throw new ConflictError('ASSISTANT_BUSY', `${a.displayName} abhi doosre procedure par hain.`);
     const now = new Date();
     await tx.procedureTaskAssignment.updateMany({ where: { procedureTaskId: t.id, endedAt: null }, data: { endedAt: now } });

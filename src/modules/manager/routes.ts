@@ -8,6 +8,7 @@ import { dashboard } from './dashboard';
 import * as followups from './followups';
 import * as reports from './reports';
 import * as schedule from './schedule';
+import * as doctorHours from './doctorHours';
 import * as staff from './staff';
 import * as stockChecks from './stockChecks';
 
@@ -63,6 +64,26 @@ managerRouter.post(
 // Doctors, leave impact, reschedule
 managerRouter.get('/doctors-today', route({ permission: 'availability:approve' }, async () => doctorsToday()));
 managerRouter.get('/doctors/:id/day', route({ permission: 'availability:approve', params: idParam, query: z.object({ date: isoDate.optional() }) }, async ({ params, query }) => schedule.doctorDay(params.id, query.date)));
+// Doctor weekly hours + consultation room (D-049)
+managerRouter.get('/doctor-hours', route({ permission: 'availability:approve' }, async () => doctorHours.list()));
+managerRouter.put(
+  '/doctor-hours/:id',
+  route(
+    {
+      permission: 'availability:approve',
+      params: idParam,
+      body: z.object({
+        effectiveFrom: isoDate,
+        days: z.array(z.object({ weekday: z.number().int().min(1).max(7), start: z.string().max(5), end: z.string().max(5) })).max(28),
+      }),
+    },
+    async ({ actor, params, body }) => doctorHours.saveHours(actor, params.id, body),
+  ),
+);
+managerRouter.put(
+  '/doctor-hours/:id/room',
+  route({ permission: 'availability:approve', params: idParam, body: z.object({ roomId: z.string().min(1).max(64).nullable() }) }, async ({ actor, params, body }) => doctorHours.setRoom(actor, params.id, body.roomId)),
+);
 managerRouter.get('/leave-impacts', route({ permission: 'availability:approve' }, async () => schedule.leaveImpacts()));
 managerRouter.post('/leave-impacts/:id/resolve', route({ permission: 'availability:approve', params: idParam }, async ({ actor, params }) => schedule.resolveLeaveImpact(actor, params.id)));
 managerRouter.get('/reschedule-requests', route({ permission: 'appointments:reschedule_approve' }, async () => schedule.rescheduleRequests()));

@@ -23,7 +23,7 @@ developerRouter.get(
         ...(query.active ? { active: query.active === 'true' } : {}),
         ...(query.q?.trim() ? { OR: [{ displayName: { contains: query.q.trim() } }, { memberCode: { contains: query.q.trim().toUpperCase() } }, { email: { contains: query.q.trim().toLowerCase() } }] } : {}),
       },
-      select: { id: true, displayName: true, role: true, email: true, phone: true, memberCode: true, title: true, active: true, mustChangePassword: true, createdAt: true, doctorProfile: { select: { specialty: true } } },
+      select: { id: true, displayName: true, role: true, email: true, phone: true, memberCode: true, title: true, active: true, mustChangePassword: true, attendanceRequired: true, createdAt: true, doctorProfile: { select: { specialty: true } } },
       orderBy: [{ active: 'desc' }, { role: 'asc' }, { displayName: 'asc' }],
     });
     const seen = await prisma.session.groupBy({ by: ['userId'], where: { userId: { in: users.map((u) => u.id) } }, _max: { lastUsedAt: true } });

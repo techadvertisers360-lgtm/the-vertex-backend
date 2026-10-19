@@ -85,6 +85,15 @@ export async function loadEngineData(db: Tx | typeof prisma, o: LoadOptions): Pr
     db.room.findMany({ where: { kind: roomKindFor(o.type) as RoomKind, active: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
   ]);
 
+  // Consultation rooms the Manager assigned to Doctors (D-049): this Doctor's own room first, rooms assigned to other
+  // Doctors last — the engine takes the first free room in this order, so a free assigned room is always used.
+  if (rooms[0]?.kind === 'CONSULT') {
+    const owners = await db.doctorProfile.findMany({ where: { defaultRoomId: { not: null } }, select: { userId: true, defaultRoomId: true } });
+    const mine = owners.find((x) => x.userId === o.doctorId)?.defaultRoomId ?? null;
+    const others = new Set(owners.filter((x) => x.userId !== o.doctorId).map((x) => x.defaultRoomId));
+    const rank = (id: string) => (id === mine ? 0 : others.has(id) ? 2 : 1);
+    rooms.sort((a, b) => rank(a.id) - rank(b.id)); // stable: keeps sortOrder within each group
+  }
   const reservations = await db.roomReservation.findMany({
     where: {
       roomId: { in: rooms.map((r) => r.id) },

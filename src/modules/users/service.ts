@@ -46,6 +46,7 @@ const publicUser = {
   active: true,
   isDemo: true,
   mustChangePassword: true,
+  attendanceRequired: true,
   createdAt: true,
 } as const;
 
@@ -118,6 +119,8 @@ export interface UpdateUserInput {
   email?: string | null;
   phone?: string | null;
   title?: string | null;
+  /** Check-in / check-out on or off for this person — the developer only (D-049). */
+  attendanceRequired?: boolean;
 }
 
 /** Role change or disable bumps tokenVersion and revokes sessions, so it applies on the next API request (spec §2). */
@@ -128,6 +131,7 @@ export async function updateUser(actor: Actor, id: string, input: UpdateUserInpu
     deny('User', id, 'users:no_self_role_or_disable');
   }
   await assertCanManageRole(actor, before.role);
+  if (input.attendanceRequired !== undefined && actor.role !== 'DEVELOPER') deny('User', id, 'users:attendance_switch_developer_only');
   if (input.role && input.role !== before.role) {
     await assertCanManageRole(actor, input.role);
     // Doctor ↔ non-doctor role change would orphan clinical ownership; a separate account is required.
@@ -149,6 +153,7 @@ export async function updateUser(actor: Actor, id: string, input: UpdateUserInpu
         email: input.email === undefined ? undefined : (input.email?.toLowerCase() ?? null),
         phone,
         title: input.title,
+        attendanceRequired: input.attendanceRequired,
         ...(securityChange ? { tokenVersion: { increment: 1 } } : {}),
       },
       select: publicUser,

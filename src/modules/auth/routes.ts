@@ -36,12 +36,12 @@ function body<T extends z.ZodTypeAny>(schema: T, req: Request): z.infer<T> {
 const meta = (req: Request) => ({ ip: req.ip, userAgent: req.get('user-agent') });
 
 function profile(
-  user: { id: string; displayName: string; role: keyof typeof ROLE_HOME; title: string | null; email: string | null; phone: string | null; memberCode: string | null; mustChangePassword: boolean },
+  user: { id: string; displayName: string; role: keyof typeof ROLE_HOME; title: string | null; email: string | null; phone: string | null; memberCode: string | null; mustChangePassword: boolean; attendanceRequired?: boolean },
   viewAs?: { by: string } | null,
 ) {
   return {
     // Only the developer may be asked to change a password (D-044); everyone else keeps the one they were given.
-    user: { id: user.id, displayName: user.displayName, role: user.role, title: user.title, email: user.email, phone: user.phone, memberCode: user.memberCode, mustChangePassword: !viewAs && user.role === 'DEVELOPER' && user.mustChangePassword },
+    user: { id: user.id, displayName: user.displayName, role: user.role, title: user.title, email: user.email, phone: user.phone, memberCode: user.memberCode, mustChangePassword: !viewAs && user.role === 'DEVELOPER' && user.mustChangePassword, attendanceRequired: user.attendanceRequired ?? true },
     /** Developer "view as" (D-043): the screens are this user's, read-only. */
     viewAs: viewAs ?? null,
     permissions: ROLE_PERMISSIONS[user.role],

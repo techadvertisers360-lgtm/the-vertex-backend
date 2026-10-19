@@ -223,7 +223,7 @@ describe('§18 / §20 — low-stock and expiry alerts, never duplicated', () => 
     const gone = await prisma.stockBatch.create({ data: { itemId: it2.id, lotNo: 'E0', unitCostPaisa: 1n, expiryDate: dateOnly(addDaysStr(today, -2)) } });
     await runStockAlerts();
     expect((await prisma.stockBatch.findUniqueOrThrow({ where: { id: gone.id } })).status).toBe('EXPIRED');
-  });
+  }, 60_000); // scans every stock item; the shared test DB grows over runs
 });
 
 describe('§14 — daily cash closing and cash reports with outstanding installments', () => {

@@ -318,6 +318,8 @@ model User {
   passwordHash       String
   role               Role
   active             Boolean  @default(true)
+  /// Developer switch (D-049): false = this person does not check in / out; the app treats them as on duty.
+  attendanceRequired Boolean  @default(true)
   tokenVersion       Int      @default(0) // bump to invalidate all access tokens
   title              String? // e.g. "Marketing & Development Director / Co-Founder"
   isDemo             Boolean  @default(false)
@@ -387,10 +389,12 @@ model LeadMemberProfile {
 }
 
 model DoctorProfile {
-  id        String   @id @default(cuid())
-  userId    String   @unique
-  specialty String?
-  createdAt DateTime @default(now())
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  specialty     String?
+  /// Consultation room the Manager assigned to this Doctor (D-049): bookings use it first when it is free.
+  defaultRoomId String?
+  createdAt     DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
