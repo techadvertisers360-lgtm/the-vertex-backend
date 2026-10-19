@@ -11,7 +11,8 @@ secrets/
 *.pem
 *-service-account*.json
 
-# Build output
+# Build output (public/ is an empty Vercel output folder created at build time)
+public/
 dist/
 build/
 coverage/
