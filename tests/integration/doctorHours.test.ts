@@ -120,3 +120,35 @@ describe('D-050 — MD and Manager see who checked in / out and when', () => {
     for (const role of ['RECEPTIONIST', 'LEAD_MEMBER', 'ASSISTANT'] as const) expect((await call((await agentFor(role)).agent).get('/api/md/attendance')).status).toBe(403);
   });
 });
+
+describe('D-051 — the Manager adds and edits rooms', () => {
+  it('adds a room that bookings can use; cannot take a room with bookings ahead out of use; others refused', async () => {
+    const code = `C${String(Date.now()).slice(-5)}`;
+    const add = await mgr.post('/api/manager/rooms-admin', { code: code.toLowerCase(), name: 'Skin room', kind: 'CONSULT' });
+    expect(add.status).toBe(201);
+    expect(add.body).toMatchObject({ code, kind: 'CONSULT', active: true });
+    expect((await mgr.post('/api/manager/rooms-admin', { code, kind: 'CONSULT' })).status).toBe(409);
+    expect((await mgr.post('/api/manager/rooms-admin', { code: 'bad code!', kind: 'CONSULT' })).status).toBe(422);
+
+    // assign it to a Doctor and book: the new room is used
+    const doc = await makeUser('DOCTOR');
+    await mgr.put(`/api/manager/doctor-hours/${doc.id}`, { effectiveFrom: clinicDateStr(new Date()), days: ALL_WEEK('09:00', '21:00') });
+    await mgr.put(`/api/manager/doctor-hours/${doc.id}/room`, { roomId: add.body.id });
+    const b = await book(doc.id, at(12, 10));
+    expect(b.body.appointment.roomId).toBe(add.body.id);
+
+    const busy = await mgr.patch(`/api/manager/rooms-admin/${add.body.id}`, { active: false });
+    expect(busy.status).toBe(409);
+    expect(busy.body.error.code).toBe('ROOM_HAS_BOOKINGS');
+    expect((await mgr.patch(`/api/manager/rooms-admin/${add.body.id}`, { name: 'Skin room 2' })).body.name).toBe('Skin room 2');
+    const listed = (await mgr.get('/api/manager/rooms-admin')).body.items.find((r: { id: string }) => r.id === add.body.id);
+    expect(listed).toMatchObject({ bookingsAhead: 1, doctors: [doc.displayName] });
+
+    // once the booking is gone the room can be taken out of use; the Doctor's room is cleared
+    await prisma.roomReservation.updateMany({ where: { roomId: add.body.id }, data: { status: 'CANCELLED' } });
+    expect((await mgr.patch(`/api/manager/rooms-admin/${add.body.id}`, { active: false })).body.active).toBe(false);
+    expect((await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doc.id } })).defaultRoomId).toBeNull();
+    expect(await prisma.auditEvent.count({ where: { action: { in: ['ROOM_CREATED', 'ROOM_UPDATED'] }, recordId: add.body.id } })).toBe(3);
+    for (const role of ['RECEPTIONIST', 'ASSISTANT'] as const) expect((await call((await agentFor(role)).agent).post('/api/manager/rooms-admin', { code: 'X9', kind: 'CONSULT' })).status).toBe(403);
+  });
+});

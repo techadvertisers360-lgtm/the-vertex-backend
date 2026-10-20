@@ -9,6 +9,7 @@ import * as followups from './followups';
 import * as reports from './reports';
 import * as schedule from './schedule';
 import * as doctorHours from './doctorHours';
+import * as roomsAdmin from './roomsAdmin';
 import * as staff from './staff';
 import * as stockChecks from './stockChecks';
 
@@ -64,6 +65,20 @@ managerRouter.post(
 // Doctors, leave impact, reschedule
 managerRouter.get('/doctors-today', route({ permission: 'availability:approve' }, async () => doctorsToday()));
 managerRouter.get('/doctors/:id/day', route({ permission: 'availability:approve', params: idParam, query: z.object({ date: isoDate.optional() }) }, async ({ params, query }) => schedule.doctorDay(params.id, query.date)));
+// Rooms: add / edit / take out of use (D-051)
+const roomKind = z.enum(['CONSULT', 'PROCEDURE']);
+managerRouter.get('/rooms-admin', route({ permission: 'availability:approve' }, async () => roomsAdmin.listRooms()));
+managerRouter.post(
+  '/rooms-admin',
+  route({ permission: 'availability:approve', status: 201, body: z.object({ code: z.string().trim().min(1).max(20), name: z.string().max(60).optional(), kind: roomKind }) }, async ({ actor, body }) => roomsAdmin.createRoom(actor, body)),
+);
+managerRouter.patch(
+  '/rooms-admin/:id',
+  route(
+    { permission: 'availability:approve', params: idParam, body: z.object({ code: z.string().trim().min(1).max(20).optional(), name: z.string().max(60).optional(), kind: roomKind.optional(), active: z.boolean().optional(), sortOrder: z.number().int().min(0).max(999).optional() }) },
+    async ({ actor, params, body }) => roomsAdmin.updateRoom(actor, params.id, body),
+  ),
+);
 // Doctor weekly hours + consultation room (D-049)
 managerRouter.get('/doctor-hours', route({ permission: 'availability:approve' }, async () => doctorHours.list()));
 managerRouter.put(

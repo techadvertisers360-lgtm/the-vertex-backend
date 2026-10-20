@@ -236,7 +236,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   MANAGER: [
     { key: 'dashboard', label: 'Dashboard', path: '/manager', permission: 'manager:dashboard' },
     { key: 'tracker', label: 'Patient Tracker', path: '/manager/tracker', permission: 'appointments:read' },
-    { key: 'schedule', label: 'Doctors & Rooms', path: '/manager/schedule', permission: 'availability:approve' },
+    { key: 'schedule', label: 'Doctors, Timing & Rooms', path: '/manager/schedule', permission: 'availability:approve' },
     { key: 'staff', label: 'Staff', path: '/manager/staff', permission: 'manager:staff_review' },
     { key: 'rooms', label: 'Room Verification', path: '/manager/rooms', permission: 'manager:room_verify' },
     { key: 'followups', label: 'Follow-ups', path: '/manager/followups', permission: 'manager:followups' },
