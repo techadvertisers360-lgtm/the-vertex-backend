@@ -39,13 +39,20 @@ function datasourceUrl(): string | undefined {
   return withCaCert(url, path);
 }
 
+/**
+ * Interactive-transaction limits. On Vercel every query crosses the network to the database, so a booking (~60
+ * statements) can take far longer than locally: allow up to 50 s there (function limit 60 s), 20 s elsewhere (D-054).
+ */
+export const TX_TIMEOUT_MS = Number(process.env.TX_TIMEOUT_MS) || (process.env.VERCEL ? 50_000 : 20_000);
+export const TX_MAX_WAIT_MS = process.env.VERCEL ? 15_000 : 10_000;
+
 export const prisma = new PrismaClient({
   datasourceUrl: datasourceUrl(),
   // Tests deliberately trigger constraint/trigger errors; keep their output readable.
   log: process.env.PRISMA_LOG === 'query' ? ['query', 'warn', 'error'] : process.env.NODE_ENV === 'test' ? [] : ['warn', 'error'],
   // Prisma's 5 s default interactive-transaction timeout is too tight for multi-step business transactions
   // (booking + messages + notifications) on a busy server; long transactions are still bounded.
-  transactionOptions: { maxWait: 10_000, timeout: 20_000 },
+  transactionOptions: { maxWait: TX_MAX_WAIT_MS, timeout: TX_TIMEOUT_MS },
 });
 
 /** Interactive transaction client. Services accept `Tx` so callers can compose them in one transaction. */
@@ -55,7 +62,7 @@ export type Db = PrismaClient | Tx;
 /** Run `fn` in a new transaction, or inside the caller's transaction when `db` already is one. */
 export async function inTx<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   if ('$transaction' in db) {
-    return (db as PrismaClient).$transaction(fn, { timeout: 20000, maxWait: 10000 });
+    return (db as PrismaClient).$transaction(fn, { timeout: TX_TIMEOUT_MS, maxWait: TX_MAX_WAIT_MS });
   }
   return fn(db as Tx);
 }

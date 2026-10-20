@@ -1,5 +1,5 @@
 import type { Appointment, AppointmentSource, AppointmentType, RoomKind } from '@prisma/client';
-import { prisma, type Tx } from '../../lib/prisma';
+import { prisma, TX_MAX_WAIT_MS, TX_TIMEOUT_MS, type Tx } from '../../lib/prisma';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors';
 import { addDaysStr, addMinutes, ceilToStep, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr } from '../../lib/time';
 import { audit, type Actor } from '../audit';
@@ -169,7 +169,7 @@ export async function lockForScheduling(tx: Tx, doctorIds: string[], kinds: Room
   }
 }
 
-export const TX_OPTS = { isolationLevel: 'ReadCommitted' as const, timeout: 20000, maxWait: 10000 };
+export const TX_OPTS = { isolationLevel: 'ReadCommitted' as const, timeout: TX_TIMEOUT_MS, maxWait: TX_MAX_WAIT_MS };
 
 /** Human message for the primary conflict (spec §24 wording). */
 export function conflictMessage(conflicts: Conflict[]): string {
