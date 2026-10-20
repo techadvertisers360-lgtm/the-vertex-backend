@@ -182,6 +182,16 @@ receptionRouter.post(
     async ({ actor, body, idempotencyKey }) => rstock.addStock(actor, body, idempotencyKey!),
   ),
 );
+// Manager verification of Reception stock-in (D-052)
+receptionRouter.get(
+  '/stock-intakes',
+  route({ permission: ['stock:reception', 'stock:manage'], query: z.object({ scope: z.enum(['pending', 'recent']).default('pending') }) }, async ({ query }) => rstock.intakes(query.scope)),
+);
+receptionRouter.post('/stock-intakes/:id/verify', route({ permission: 'stock:manage', params: idParam }, async ({ actor, params }) => rstock.verifyIntake(actor, params.id)));
+receptionRouter.post(
+  '/stock-intakes/:id/reject',
+  route({ permission: 'stock:manage', params: idParam, body: z.object({ reason: z.string().trim().min(2).max(500) }) }, async ({ actor, params, body }) => rstock.rejectIntake(actor, params.id, body.reason)),
+);
 receptionRouter.patch(
   '/stock/:id',
   route(

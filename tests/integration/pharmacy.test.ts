@@ -7,10 +7,12 @@ import { agentFor, call, makeUser, newKey, prisma, uid, uniquePhone } from './he
 /** D-048 — Reception "Stock & batches" (procedure / pharmacy) and pharmacy lines on the invoice. */
 
 let r: { user: { id: string }; api: ReturnType<typeof call> };
+let mgr: ReturnType<typeof call>;
 
 beforeAll(async () => {
   const a = await agentFor('RECEPTIONIST');
   r = { user: a.user, api: call(a.agent) };
+  mgr = call((await agentFor('MANAGER')).agent);
 });
 
 const pname = (p: string) => `${p} ${uid()}`;
@@ -18,7 +20,9 @@ const pname = (p: string) => `${p} ${uid()}`;
 async function addProduct(kind: 'PROCEDURE' | 'PHARMACY', name: string, quantity: number, pricePaisa: number, extra: Record<string, unknown> = {}) {
   const res = await r.api.post('/api/reception/stock', { kind, name, quantity, pricePaisa, ...extra }, newKey());
   expect(res.status, JSON.stringify(res.body)).toBe(201);
-  return res.body as { itemId: string; batchId: string };
+  // the Manager verifies Reception's stock-in (D-052)
+  expect((await mgr.post(`/api/reception/stock-intakes/${res.body.intakeId}/verify`)).status).toBe(200);
+  return res.body as { itemId: string; intakeId: string };
 }
 
 /** A visit at Reception with an open invoice. */
@@ -51,8 +55,10 @@ describe('D-048 — Reception Stock & batches: two categories, add with name / q
     expect((await r.api.post('/api/reception/stock', { kind: 'PHARMACY', name: gloves, quantity: 1, pricePaisa: 1 }, newKey())).status).toBe(409);
     // ledger-derived, stock-in rows, audited, retry-safe
     const key = newKey();
-    await r.api.post('/api/reception/stock', { kind: 'PROCEDURE', name: gloves, quantity: 5, pricePaisa: 1600 }, key);
-    await r.api.post('/api/reception/stock', { kind: 'PROCEDURE', name: gloves, quantity: 5, pricePaisa: 1600 }, key);
+    const once = await r.api.post('/api/reception/stock', { kind: 'PROCEDURE', name: gloves, quantity: 5, pricePaisa: 1600 }, key);
+    const twice = await r.api.post('/api/reception/stock', { kind: 'PROCEDURE', name: gloves, quantity: 5, pricePaisa: 1600 }, key);
+    expect(twice.body.intakeId).toBe(once.body.intakeId);
+    await mgr.post(`/api/reception/stock-intakes/${once.body.intakeId}/verify`);
     expect(await onHand(prisma, g.itemId)).toBe(155);
     expect(await prisma.stockTransaction.count({ where: { itemId: g.itemId, type: 'STOCK_IN' } })).toBe(3);
     // procedure products only in the Assistant's usage list
@@ -134,5 +140,33 @@ describe('D-048 — pharmacy on the invoice after the prescription photo', () =>
     const bal = (await r.api.get(`/api/reception/invoices/${invId}`)).body.balancePaisa;
     expect((await r.api.post(`/api/reception/invoices/${invId}/payments`, { amountPaisa: bal, method: 'CASH' }, newKey())).status).toBe(201);
     expect((await r.api.post(`/api/reception/invoices/${invId}/pharmacy/${l2.id}/reverse`, { reason: 'late' })).status).toBe(409);
+  });
+});
+
+describe('D-052 — Reception adds stock, the Manager verifies it', () => {
+  it('pending stock is neither usable nor sellable; verify brings it in; reject keeps it out and tells Reception', async () => {
+    const name = pname('Toner');
+    const add = await r.api.post('/api/reception/stock', { kind: 'PHARMACY', name, quantity: 12, pricePaisa: 90000 }, newKey());
+    expect(add.body.status).toBe('PENDING');
+    const row = () => r.api.get('/api/reception/stock?kind=PHARMACY').then((x) => x.body.items.find((i: { name: string }) => i.name === name));
+    expect(await row()).toMatchObject({ onHand: 0, usable: 0, pendingQty: 12, pricePaisa: null });
+    expect((await r.api.get('/api/reception/pharmacy/products')).body.items.find((i: { id: string }) => i.id === add.body.itemId)?.usable ?? 0).toBe(0);
+    expect(await prisma.notification.count({ where: { type: 'STOCK_INTAKE_PENDING', recordId: add.body.intakeId } })).toBeGreaterThan(0);
+
+    // only the Manager decides; Reception cannot verify its own entry
+    expect((await r.api.post(`/api/reception/stock-intakes/${add.body.intakeId}/verify`)).status).toBe(403);
+    const pending = (await mgr.get('/api/reception/stock-intakes?scope=pending')).body.items.find((i: { id: string }) => i.id === add.body.intakeId);
+    expect(pending).toMatchObject({ name, quantity: 12, pricePaisa: 90000, status: 'PENDING' });
+    expect((await mgr.post(`/api/reception/stock-intakes/${add.body.intakeId}/verify`)).status).toBe(200);
+    expect(await row()).toMatchObject({ onHand: 12, usable: 12, pendingQty: 0, pricePaisa: 90000 });
+    expect((await mgr.post(`/api/reception/stock-intakes/${add.body.intakeId}/verify`)).status).toBe(409); // once
+
+    const more = await r.api.post('/api/reception/stock', { kind: 'PHARMACY', name, quantity: 100, pricePaisa: 95000 }, newKey());
+    expect((await mgr.post(`/api/reception/stock-intakes/${more.body.intakeId}/reject`, { reason: 'Bill par 10 likha hai, 100 nahi' })).status).toBe(200);
+    expect(await row()).toMatchObject({ onHand: 12, pendingQty: 0, pricePaisa: 90000 }); // nothing changed
+    const told = await prisma.notification.findFirstOrThrow({ where: { recipientId: r.user.id, type: 'STOCK_INTAKE_REJECTED', recordId: more.body.intakeId } });
+    expect(told.body).toContain('10 likha');
+    expect((await r.api.get('/api/reception/stock-intakes?scope=recent')).body.items.find((i: { id: string }) => i.id === more.body.intakeId)).toMatchObject({ status: 'REJECTED', reason: 'Bill par 10 likha hai, 100 nahi' });
+    for (const role of ['DOCTOR', 'ASSISTANT'] as const) expect((await call((await agentFor(role)).agent).get('/api/reception/stock-intakes')).status).toBe(403);
   });
 });

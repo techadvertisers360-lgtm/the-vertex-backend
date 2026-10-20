@@ -207,6 +207,36 @@ enum StockTxnType {
   SALE
 }
 
+enum IntakeStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+/// Stock the Receptionist added, waiting for the Manager's verification (D-052). Nothing reaches the stock ledger
+/// until it is verified; a rejected intake never does.
+model StockIntake {
+  id             String       @id @default(cuid())
+  itemId         String
+  quantity       Int
+  pricePaisa     BigInt
+  expiryDate     DateTime?    @db.Date
+  status         IntakeStatus @default(PENDING)
+  addedById      String
+  createdAt      DateTime     @default(now())
+  decidedById    String?
+  decidedAt      DateTime?
+  reason         String?      @db.Text
+  batchId        String?
+  idempotencyKey String       @unique
+
+  item StockItem @relation(fields: [itemId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([itemId])
+  @@map("stock_intakes")
+}
+
 /// What a product is for (D-048): used in procedures, or sold from the pharmacy at billing.
 enum StockKind {
   PROCEDURE
@@ -1354,6 +1384,7 @@ model StockItem {
 
   batches      StockBatch[]
   transactions StockTransaction[]
+  intakes      StockIntake[]
 
   @@map("stock_items")
 }

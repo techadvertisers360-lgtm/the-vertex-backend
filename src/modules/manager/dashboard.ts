@@ -109,6 +109,7 @@ export async function dashboard(actor: Actor) {
     { n: historyReq, title: 'history access request', href: '/manager/approvals' },
     { n: altHours, title: 'alternate hours request', href: '/manager/approvals?tab=alternate' },
     { n: demands, title: 'stock demand', href: '/manager/stock' },
+    { n: await prisma.stockIntake.count({ where: { status: 'PENDING' } }), title: 'stock entry to verify', href: '/manager/stock?tab=verify' },
   ];
   for (const a of approvals.filter((x) => x.n)) highlights.push({ key: `approval:${a.href}`, kind: 'approval', severity: 'info', title: `${a.n} ${a.title}${a.n === 1 ? '' : 's'} pending`, detail: 'Approval chahiye', href: a.href, at: now });
 
