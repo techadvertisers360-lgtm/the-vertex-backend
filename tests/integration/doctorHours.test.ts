@@ -152,3 +152,22 @@ describe('D-051 — the Manager adds and edits rooms', () => {
     for (const role of ['RECEPTIONIST', 'ASSISTANT'] as const) expect((await call((await agentFor(role)).agent).post('/api/manager/rooms-admin', { code: 'X9', kind: 'CONSULT' })).status).toBe(403);
   });
 });
+
+describe('D-053 — the MD opens today’s patients and Doctor leave (read-only)', () => {
+  it('reads the day’s appointments, Doctors today and upcoming leave; cannot book', async () => {
+    const md = call((await agentFor('MD')).agent);
+    const doc = await makeUser('DOCTOR');
+    await mgr.put(`/api/manager/doctor-hours/${doc.id}`, { effectiveFrom: clinicDateStr(new Date()), days: ALL_WEEK('09:00', '21:00') });
+    const leaveDay = addDaysStr(clinicDateStr(new Date()), 3);
+    await prisma.doctorAvailabilityException.create({ data: { doctorId: doc.id, kind: 'LEAVE', date: new Date(`${leaveDay}T00:00:00Z`), status: 'APPROVED', requestedById: doc.id, reason: 'Family' } });
+
+    const appts = await md.get('/api/reception/appointments');
+    expect(appts.status).toBe(200);
+    expect((await md.get('/api/reception/doctors-today')).body.items.some((d: { id: string }) => d.id === doc.id)).toBe(true);
+    const leaves = await md.get('/api/md/doctor-leaves');
+    expect(leaves.body.items.find((l: { date: string; doctor: string }) => l.date === leaveDay && l.doctor === doc.displayName)).toMatchObject({ kind: 'LEAVE', status: 'APPROVED', reason: 'Family' });
+    expect((await mgr.get('/api/md/doctor-leaves')).status).toBe(200);
+    expect((await md.post('/api/reception/appointments', { patientId: (await patient()).id, doctorId: doc.id, type: 'CONSULTATION', start: at(11) }, newKey())).status).toBe(403);
+    expect((await call((await agentFor('LEAD_MEMBER')).agent).get('/api/md/doctor-leaves')).status).toBe(403);
+  });
+});

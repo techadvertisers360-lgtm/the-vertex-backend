@@ -40,7 +40,8 @@ receptionRouter.get(
   '/appointments',
   route(
     {
-      permission: ['reception:checkin', 'manager:dashboard'],
+      // the MD reads the day's list too (D-053)
+      permission: ['reception:checkin', 'manager:dashboard', 'md:dashboard'],
       query: z.object({
         date: isoDate.optional(),
         status: z.nativeEnum(AppointmentStatus).optional(),
@@ -103,7 +104,7 @@ receptionRouter.post(
 );
 
 receptionRouter.get('/tracker', route({ permission: ['reception:checkin', 'manager:dashboard'], query: z.object({ date: isoDate.optional() }) }, async ({ query }) => svc.tracker(query.date)));
-receptionRouter.get('/doctors-today', route({ permission: ['reception:checkin', 'manager:dashboard'] }, async () => svc.doctorsToday()));
+receptionRouter.get('/doctors-today', route({ permission: ['reception:checkin', 'manager:dashboard', 'md:dashboard'] }, async () => svc.doctorsToday()));
 receptionRouter.get('/done', route({ permission: ['reception:checkin', 'manager:dashboard'], query: z.object({ date: isoDate.optional() }) }, async ({ query }) => svc.doneList(query.date)));
 
 // Billing

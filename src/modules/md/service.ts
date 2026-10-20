@@ -145,6 +145,30 @@ export async function escalatedReports() {
   };
 }
 
+/** Doctor leave / absence from today for the next `days` days (D-053) — approved and still waiting. */
+export async function doctorLeaves(days = 30) {
+  const today = clinicDateStr(new Date());
+  const rows = await prisma.doctorAvailabilityException.findMany({
+    where: { kind: { in: ['LEAVE', 'ABSENT'] }, status: { in: ['APPROVED', 'PENDING'] }, date: { gte: dateOnly(today), lte: dateOnly(addDaysStr(today, days)) } },
+    orderBy: [{ date: 'asc' }, { startMinute: 'asc' }],
+  });
+  const docs = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.doctorId))] } }, select: { id: true, displayName: true } });
+  const hm = (m: number | null) => (m === null ? null : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  return {
+    items: rows.map((r) => ({
+      id: r.id,
+      doctor: docs.find((d) => d.id === r.doctorId)?.displayName ?? '—',
+      kind: r.kind,
+      status: r.status,
+      date: dateOnlyStr(r.date),
+      from: hm(r.startMinute),
+      to: hm(r.endMinute),
+      reason: r.reason,
+      impactOpen: r.status === 'APPROVED' && !r.impactResolvedAt,
+    })),
+  };
+}
+
 // ───────────── Reports with drill-down (spec §15) ─────────────
 
 /**
