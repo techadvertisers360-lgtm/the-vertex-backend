@@ -93,7 +93,16 @@ export async function listVendors() {
     prisma.vendor.findMany({ orderBy: { name: 'asc' } }),
     prisma.ledgerEntry.groupBy({ by: ['vendorId'], where: { account: 'SUPPLIER_PAYABLE' }, _sum: { amountPaisa: true } }),
   ]);
-  return { items: vendors.map((v) => ({ ...v, balancePaisa: sums.find((s) => s.vendorId === v.id)?._sum.amountPaisa ?? 0n })) };
+  const paid = await prisma.supplierPayment.groupBy({ by: ['vendorId'], _sum: { amountPaisa: true }, _max: { paidAt: true } });
+  return {
+    items: vendors.map((v) => ({
+      ...v,
+      balancePaisa: sums.find((s) => s.vendorId === v.id)?._sum.amountPaisa ?? 0n,
+      // Total paid to this vendor ever and the last payment date (D-050).
+      paidPaisa: paid.find((x) => x.vendorId === v.id)?._sum.amountPaisa ?? 0n,
+      lastPaidAt: paid.find((x) => x.vendorId === v.id)?._max.paidAt ?? null,
+    })),
+  };
 }
 
 export async function saveVendor(actor: Actor, input: { id?: string; name: string; phone?: string; address?: string; products?: string; active?: boolean }) {
@@ -118,7 +127,7 @@ export async function vendorLedger(vendorId: string) {
   const rows = await prisma.ledgerEntry.findMany({ where: { account: 'SUPPLIER_PAYABLE', vendorId }, orderBy: { createdAt: 'asc' } });
   const [receipts, payments, returns] = await Promise.all([
     prisma.goodsReceipt.findMany({ where: { id: { in: rows.filter((r) => r.refType === 'GoodsReceipt').map((r) => r.refId) } }, select: { id: true, vendorInvoiceNo: true, attachmentId: true, demandId: true } }),
-    prisma.supplierPayment.findMany({ where: { id: { in: rows.filter((r) => r.refType === 'SupplierPayment').map((r) => r.refId) } }, select: { id: true, method: true, reference: true } }),
+    prisma.supplierPayment.findMany({ where: { id: { in: rows.filter((r) => r.refType === 'SupplierPayment').map((r) => r.refId) } }, select: { id: true, method: true, reference: true, note: true } }),
     prisma.supplierReturn.findMany({ where: { id: { in: rows.filter((r) => r.refType === 'SupplierReturn').map((r) => r.refId) } }, select: { id: true, quantity: true, reason: true, itemId: true } }),
   ]);
   let running = 0n;
@@ -144,7 +153,11 @@ export async function vendorLedger(vendorId: string) {
 }
 
 /** Supplier payment by cash, cheque or bank/online; reduces payable and cash-in-hand or the chosen bank ledger. */
-export async function payVendor(actor: Actor, vendorId: string, input: { amountPaisa: number; method: PaymentMethod; reference?: string; bankAccountId?: string }, idempotencyKey: string) {
+/**
+ * Record money paid to a vendor (D-050). Any amount: above what the clinic owes it becomes an advance (the vendor
+ * balance goes below zero and later purchases use it up). Optional note: what the payment was for.
+ */
+export async function payVendor(actor: Actor, vendorId: string, input: { amountPaisa: number; method: PaymentMethod; reference?: string; bankAccountId?: string; note?: string }, idempotencyKey: string) {
   if (input.method === 'CARD') throw new ValidationError('Supplier payment: cash, cheque ya bank/online.');
   if (input.method !== 'CASH' && !input.bankAccountId) throw new ValidationError('Bank account chunein.');
   if (input.method !== 'CASH' && !input.reference?.trim()) throw new ValidationError(input.method === 'CHEQUE' ? 'Cheque number likhein.' : 'Transaction reference likhein.');
@@ -155,18 +168,17 @@ export async function payVendor(actor: Actor, vendorId: string, input: { amountP
     const v = await tx.vendor.findUnique({ where: { id: vendorId } });
     if (!v) throw new NotFoundError('Vendor');
     if (input.bankAccountId && !(await tx.bankAccount.findFirst({ where: { id: input.bankAccountId, active: true } }))) throw new ValidationError('Bank account nahi mila.');
-    const owed = (await tx.ledgerEntry.aggregate({ where: { account: 'SUPPLIER_PAYABLE', vendorId }, _sum: { amountPaisa: true } }))._sum.amountPaisa ?? 0n;
     const amount = BigInt(input.amountPaisa);
     if (amount <= 0n) throw new ValidationError('Amount likhein.');
-    if (amount > owed) throw new ValidationError(`Vendor ka baqi sirf Rs ${Number(owed) / 100} hai.`);
-    const p = await tx.supplierPayment.create({ data: { vendorId, amountPaisa: amount, method: input.method, reference: input.reference?.trim() || null, bankAccountId: input.method === 'CASH' ? null : input.bankAccountId!, actorId: actor.id!, idempotencyKey } });
-    await tx.ledgerEntry.create({ data: { account: 'SUPPLIER_PAYABLE', vendorId, amountPaisa: -amount, refType: 'SupplierPayment', refId: p.id, memo: `${input.method}${input.reference ? ` ${input.reference}` : ''}`, actorId: actor.id! } });
+    const note = input.note?.trim() || null;
+    const p = await tx.supplierPayment.create({ data: { vendorId, amountPaisa: amount, method: input.method, reference: input.reference?.trim() || null, note, bankAccountId: input.method === 'CASH' ? null : input.bankAccountId!, actorId: actor.id!, idempotencyKey } });
+    await tx.ledgerEntry.create({ data: { account: 'SUPPLIER_PAYABLE', vendorId, amountPaisa: -amount, refType: 'SupplierPayment', refId: p.id, memo: `${input.method}${input.reference ? ` ${input.reference}` : ''}${note ? ` · ${note}` : ''}`, actorId: actor.id! } });
     await tx.ledgerEntry.create({
       data: input.method === 'CASH'
         ? { account: 'CASH_IN_HAND', vendorId, amountPaisa: -amount, refType: 'SupplierPayment', refId: p.id, memo: `Supplier payment: ${v.name}`, actorId: actor.id! }
         : { account: 'BANK', bankAccountId: input.bankAccountId!, vendorId, amountPaisa: -amount, refType: 'SupplierPayment', refId: p.id, memo: `Supplier payment: ${v.name} · ${input.reference}`, actorId: actor.id! },
     });
-    await audit(tx, actor, { action: 'SUPPLIER_PAID', recordType: 'SupplierPayment', recordId: p.id, after: { vendorId, amountPaisa: amount, method: input.method, reference: input.reference, bankAccountId: input.bankAccountId } });
+    await audit(tx, actor, { action: 'SUPPLIER_PAID', recordType: 'SupplierPayment', recordId: p.id, after: { vendorId, amountPaisa: amount, method: input.method, reference: input.reference, bankAccountId: input.bankAccountId, note } });
     return { payment: p, replayed: false };
   });
 }

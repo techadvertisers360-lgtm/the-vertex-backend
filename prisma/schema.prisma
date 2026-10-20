@@ -1499,6 +1499,8 @@ model SupplierPayment {
   amountPaisa    BigInt
   method         PaymentMethod
   reference      String?
+  /// What the payment was for (D-050), e.g. \"Gloves bill 12 Oct\" or \"Advance\".
+  note           String?       @db.Text
   bankAccountId  String?
   actorId        String
   idempotencyKey String        @unique

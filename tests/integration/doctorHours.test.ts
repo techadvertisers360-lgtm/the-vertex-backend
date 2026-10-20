@@ -100,3 +100,23 @@ describe('D-049 — check-in / check-out switched off per person by the develope
     expect((await aapi.post('/api/attendance/check-in')).status).toBe(201);
   });
 });
+
+describe('D-050 — MD and Manager see who checked in / out and when', () => {
+  it('lists every staff member with times, not-in and switched-off; others are refused', async () => {
+    const r = await agentFor('RECEPTIONIST');
+    await call(r.agent).post('/api/attendance/check-in');
+    const off = await makeUser('OFFICE_BOY');
+    await prisma.user.update({ where: { id: off.id }, data: { attendanceRequired: false } });
+    const absent = await makeUser('ASSISTANT');
+    for (const role of ['MD', 'MANAGER'] as const) {
+      const res = await call((await agentFor(role)).agent).get('/api/md/attendance');
+      expect(res.status, role).toBe(200);
+      const by = (id: string) => res.body.items.find((i: { user: { id: string } }) => i.user.id === id);
+      expect(by(r.user.id)).toMatchObject({ status: 'IN', checkInAt: expect.any(String) });
+      expect(by(off.id).status).toBe('OFF');
+      expect(by(absent.id)).toMatchObject({ status: 'NOT_IN', checkInAt: null });
+      expect(res.body.items.some((i: { user: { role: string } }) => i.user.role === 'DEVELOPER' || i.user.role === 'MD')).toBe(false);
+    }
+    for (const role of ['RECEPTIONIST', 'LEAD_MEMBER', 'ASSISTANT'] as const) expect((await call((await agentFor(role)).agent).get('/api/md/attendance')).status).toBe(403);
+  });
+});

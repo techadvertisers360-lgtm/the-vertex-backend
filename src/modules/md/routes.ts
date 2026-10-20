@@ -8,6 +8,7 @@ import * as lead from '../leadAdmin/service';
 import * as sync from '../leadSync/service';
 import { columnMapSchema } from '../leadSync/parse';
 import { parseSpreadsheetId } from '../../services/googleSheets';
+import { clinicDateStr } from '../../lib/time';
 import { ValidationError } from '../../lib/errors';
 import * as offers from '../offers/service';
 import * as md from './service';
@@ -28,6 +29,7 @@ mdRouter.post(
   '/leave-impacts/:id/escalate',
   route({ permission: 'md:dashboard', params: idParam, body: z.object({ note: z.string().trim().min(2).max(2000) }) }, async ({ actor, params, body }) => md.nudgeLeaveImpact(actor, params.id, body.note)),
 );
+mdRouter.get('/attendance', route({ permission: ['reports:all', 'manager:staff_review'], query: z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }) }, async ({ query }) => md.attendanceDay(query.date ?? clinicDateStr(new Date()))));
 mdRouter.get('/escalated-reports', route({ permission: 'md:dashboard' }, async () => md.escalatedReports()));
 mdRouter.get('/reports/staff', route({ permission: 'reports:all', query: z.object({ ...range, userId: z.string().max(64).optional() }) }, async ({ query }) => md.staffReport(query.from, query.to, query.userId)));
 mdRouter.get('/reports/purchases', route({ permission: 'reports:all', query: z.object(range) }, async ({ query }) => md.purchaseReport(query.from, query.to)));

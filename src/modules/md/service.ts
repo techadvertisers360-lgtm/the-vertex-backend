@@ -147,6 +147,30 @@ export async function escalatedReports() {
 
 // ───────────── Reports with drill-down (spec §15) ─────────────
 
+/**
+ * Attendance of one day for the MD and the Manager (D-050): every active staff member with check-in / check-out
+ * time, who has not come, and whose check-in is switched off.
+ */
+export async function attendanceDay(date: string) {
+  const [users, att] = await Promise.all([
+    prisma.user.findMany({ where: { active: true, role: { notIn: ['DEVELOPER', 'MD'] } }, select: { id: true, displayName: true, role: true, memberCode: true, attendanceRequired: true }, orderBy: [{ role: 'asc' }, { displayName: 'asc' }] }),
+    prisma.attendance.findMany({ where: { date: dateOnly(date) } }),
+  ]);
+  const items = users.map((u) => {
+    const a = att.find((x) => x.userId === u.id) ?? null;
+    const status: 'IN' | 'OUT' | 'NOT_IN' | 'OFF' = a ? (a.checkOutAt ? 'OUT' : 'IN') : u.attendanceRequired ? 'NOT_IN' : 'OFF';
+    return { user: { id: u.id, displayName: u.displayName, role: u.role, memberCode: u.memberCode }, status, checkInAt: a?.checkInAt ?? null, checkOutAt: a?.checkOutAt ?? null };
+  });
+  // Present first, by arrival time; then not checked in; then switched off.
+  const order = { IN: 0, OUT: 0, NOT_IN: 1, OFF: 2 } as const;
+  items.sort((x, y) => order[x.status] - order[y.status] || (x.checkInAt?.getTime() ?? 0) - (y.checkInAt?.getTime() ?? 0));
+  return {
+    date,
+    counts: { in: items.filter((i) => i.status === 'IN').length, out: items.filter((i) => i.status === 'OUT').length, notIn: items.filter((i) => i.status === 'NOT_IN').length, off: items.filter((i) => i.status === 'OFF').length },
+    items,
+  };
+}
+
 /** Staff attendance + arrival reviews for a date range; drill-down per person per day. */
 export async function staffReport(from: string, to: string, userId?: string) {
   const [att, reviews, users] = await Promise.all([

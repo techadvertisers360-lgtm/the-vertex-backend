@@ -126,7 +126,6 @@ describe('§18 — partial, multi-vendor receipts; batches; payable ledger', () 
     expect(await onHand(prisma, it1.id)).toBe(3);
 
     const pay = (body: object, key = newKey()) => mgr.post(`/api/inventory/vendors/${v.id}/payments`, body, key);
-    expect((await pay({ amountPaisa: 300_001, method: 'CASH' })).status).toBe(422); // owes Rs 3,000 after return
     expect((await pay({ amountPaisa: 100_000, method: 'BANK_ONLINE', bankAccountId: bankId })).status).toBe(422); // reference required
     const k = newKey();
     const cash = await pay({ amountPaisa: 100_000, method: 'CASH' }, k);
@@ -139,6 +138,16 @@ describe('§18 — partial, multi-vendor receipts; batches; payable ledger', () 
     expect(ledger.body.balancePaisa).toBe(50_000);
     expect(ledger.body.entries.map((e: { kind: string }) => e.kind)).toEqual(['GoodsReceipt', 'SupplierReturn', 'SupplierPayment', 'SupplierPayment']);
     expect(ledger.body.entries.at(-1).balancePaisa).toBe(50_000);
+
+    // D-050: paying more than owed is an advance; the note says what it was for
+    const adv = await pay({ amountPaisa: 80_000, method: 'CASH', note: 'Advance — next order' });
+    expect(adv.status).toBe(201);
+    expect(adv.body.payment.note).toBe('Advance — next order');
+    const after = await mgr.get(`/api/inventory/vendors/${v.id}/ledger`);
+    expect(after.body.balancePaisa).toBe(-30_000);
+    expect(after.body.entries.at(-1).payment.note).toBe('Advance — next order');
+    const listed = (await mgr.get('/api/inventory/vendors')).body.items.find((x: { id: string }) => x.id === v.id);
+    expect(listed).toMatchObject({ paidPaisa: 330_000, balancePaisa: -30_000 });
   });
 });
 

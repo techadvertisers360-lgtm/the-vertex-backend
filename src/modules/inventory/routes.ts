@@ -92,7 +92,7 @@ inventoryRouter.get('/vendors/:id/ledger', route({ permission: ['stock:manage', 
 inventoryRouter.post(
   '/vendors/:id/payments',
   route(
-    { permission: 'stock:manage', params: idParam, idempotent: true, status: 201, body: z.object({ amountPaisa: z.number().int().positive(), method: z.nativeEnum(PaymentMethod), reference: z.string().max(100).optional(), bankAccountId: id.optional() }) },
+    { permission: 'stock:manage', params: idParam, idempotent: true, status: 201, body: z.object({ amountPaisa: z.number().int().positive(), method: z.nativeEnum(PaymentMethod), reference: z.string().max(100).optional(), bankAccountId: id.optional(), note: z.string().max(500).optional() }) },
     async ({ actor, params, body, idempotencyKey }) => purchasing.payVendor(actor, params.id, body, idempotencyKey!),
   ),
 );
