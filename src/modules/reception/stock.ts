@@ -288,23 +288,52 @@ export async function rejectIntake(actor: Actor, id: string, reason: string) {
   });
 }
 
-/** Rename / change minimum / hide a product (no deletes — the ledger keeps its history). */
-export async function updateProduct(actor: Actor, id: string, input: { name?: string; minQty?: number; pricePaisa?: number; active?: boolean }) {
+export interface UpdateProductInput {
+  name?: string;
+  minQty?: number;
+  pricePaisa?: number;
+  active?: boolean;
+  unit?: string;
+  /** Procedure catalogue fields (D-058): a string sets the field, null / "" clears it. */
+  details?: { [K in keyof ProductDetails]?: ProductDetails[K] | null };
+}
+
+/**
+ * Edit a product (D-058): name, unit, minimum, pharmacy selling price and — for procedure products — the stock CSV
+ * columns. "Delete" from Reception is `active: false`: the product leaves the lists and pickers but its stock history
+ * stays (no hard deletes, spec §4.9); `active: true` brings it back.
+ */
+export async function updateProduct(actor: Actor, id: string, input: UpdateProductInput) {
   return prisma.$transaction(async (tx) => {
     const before = await tx.stockItem.findUnique({ where: { id } });
     if (!before) throw new NotFoundError('Product');
     const name = input.name?.trim().replace(/\s+/g, ' ');
-    if (name && name !== before.name && (await tx.stockItem.findFirst({ where: { name } }))) throw new ConflictError('ITEM_EXISTS', 'Is naam ka product pehle se hai.');
+    if (name && name !== before.name && (await tx.stockItem.findFirst({ where: { name, id: { not: id } } }))) throw new ConflictError('ITEM_EXISTS', 'Is naam ka product pehle se hai.');
+    const clean = (v: string | null | undefined) => (v === undefined ? undefined : v?.trim().replace(/\s+/g, ' ') || null);
+    const d = before.kind === 'PROCEDURE' ? (input.details ?? {}) : {};
+    const code = clean(d.code);
+    if (code && code !== before.code && (await tx.stockItem.findFirst({ where: { code, id: { not: id } } }))) throw new ConflictError('ITEM_CODE_TAKEN', `Item ID "${code}" pehle se kisi aur product ka hai.`);
+    const category = clean(d.category);
     const after = await tx.stockItem.update({
       where: { id },
       data: {
         ...(name ? { name } : {}),
+        ...(input.unit?.trim() ? { baseUnit: input.unit.trim() } : {}),
         ...(input.minQty !== undefined ? { minQty: input.minQty } : {}),
         ...(input.active !== undefined ? { active: input.active } : {}),
         ...(input.pricePaisa !== undefined && before.kind === 'PHARMACY' ? { salePricePaisa: BigInt(input.pricePaisa) } : {}),
+        ...(code !== undefined ? { code } : {}),
+        ...(category !== undefined ? { category: category ?? 'Procedure' } : {}),
+        ...(clean(d.department) !== undefined ? { department: clean(d.department) } : {}),
+        ...(clean(d.procedureUse) !== undefined ? { procedureUse: clean(d.procedureUse) } : {}),
+        ...(clean(d.packUnit) !== undefined ? { packUnit: clean(d.packUnit) } : {}),
+        ...(d.packSize !== undefined ? { packSize: d.packSize || null } : {}),
+        ...(clean(d.itemType) !== undefined ? { itemType: clean(d.itemType) } : {}),
+        ...(d.sterile !== undefined ? { sterile: d.sterile } : {}),
+        ...(clean(d.note) !== undefined ? { note: clean(d.note) } : {}),
       },
     });
-    await audit(tx, actor, { action: 'STOCK_ITEM_UPDATED', recordType: 'StockItem', recordId: id, before, after });
-    return after;
+    await audit(tx, actor, { action: input.active === false ? 'STOCK_ITEM_REMOVED' : input.active === true && !before.active ? 'STOCK_ITEM_RESTORED' : 'STOCK_ITEM_UPDATED', recordType: 'StockItem', recordId: id, before, after });
+    return { id: after.id, active: after.active };
   });
 }

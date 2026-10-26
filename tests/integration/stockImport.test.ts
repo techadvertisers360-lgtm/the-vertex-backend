@@ -107,4 +107,20 @@ describe('D-055 — stock CSV import', () => {
       batches: [{ lotNo: `LOT-${t}`, distributor: `Dist ${t}`, costPaisa: 150_000, quantity: 4, expiryDate: '2031-01-31' }],
     });
   });
+
+  it('D-058 — Reception edits any column, clears one, deletes (hides) and brings back a product', async () => {
+    const t = uid();
+    const rec = call((await agentFor('RECEPTIONIST')).agent);
+    const made = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Cannula ${t}`, quantity: 0, pricePaisa: 0, details: { code: `E-${t}`, department: 'Derma', note: 'old' } }, newKey());
+    const id = made.body.itemId as string;
+    const edit = await rec.patch(`/api/reception/stock/${id}`, { name: `Cannula 25G ${t}`, unit: 'piece', minQty: 3, details: { department: 'Aesthetics', packSize: 20, sterile: true, note: null } });
+    expect(edit.status, JSON.stringify(edit.body)).toBe(200);
+    expect(await prisma.stockItem.findUniqueOrThrow({ where: { id } })).toMatchObject({ name: `Cannula 25G ${t}`, code: `E-${t}`, department: 'Aesthetics', packSize: 20, sterile: true, note: null, minQty: 3 });
+
+    expect((await rec.patch(`/api/reception/stock/${id}`, { active: false })).status).toBe(200);
+    expect((await prisma.stockItem.findUniqueOrThrow({ where: { id } })).active).toBe(false);
+    expect(await prisma.auditEvent.count({ where: { action: 'STOCK_ITEM_REMOVED', recordId: id } })).toBe(1);
+    expect((await rec.patch(`/api/reception/stock/${id}`, { active: true })).status).toBe(200);
+    expect(await prisma.stockItem.findUnique({ where: { id } })).not.toBeNull(); // never hard-deleted
+  });
 });

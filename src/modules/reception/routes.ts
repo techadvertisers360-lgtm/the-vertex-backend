@@ -212,7 +212,30 @@ receptionRouter.post(
 receptionRouter.patch(
   '/stock/:id',
   route(
-    { permission: 'stock:reception', params: idParam, body: z.object({ name: z.string().trim().min(2).max(120).optional(), minQty: z.number().int().min(0).optional(), pricePaisa: paisa.optional(), active: z.boolean().optional() }) },
+    {
+      permission: 'stock:reception',
+      params: idParam,
+      body: z.object({
+        name: z.string().trim().min(2).max(120).optional(),
+        minQty: z.number().int().min(0).max(1_000_000).optional(),
+        pricePaisa: paisa.optional(),
+        active: z.boolean().optional(),
+        unit: z.string().trim().max(40).optional(),
+        details: z
+          .object({
+            code: z.string().trim().max(64).nullable().optional(),
+            category: z.string().trim().max(120).nullable().optional(),
+            department: z.string().trim().max(120).nullable().optional(),
+            procedureUse: z.string().trim().max(2000).nullable().optional(),
+            packUnit: z.string().trim().max(40).nullable().optional(),
+            packSize: z.number().int().min(1).max(1_000_000).nullable().optional(),
+            itemType: z.string().trim().max(120).nullable().optional(),
+            sterile: z.boolean().nullable().optional(),
+            note: z.string().trim().max(2000).nullable().optional(),
+          })
+          .optional(),
+      }),
+    },
     async ({ actor, params, body }) => rstock.updateProduct(actor, params.id, body),
   ),
 );
