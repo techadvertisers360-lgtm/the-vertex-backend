@@ -221,6 +221,11 @@ model StockIntake {
   quantity       Int
   pricePaisa     BigInt
   expiryDate     DateTime?    @db.Date
+  /// Pharmacy entry details (D-057): batch number, distributor (becomes the vendor) and purchase price per unit.
+  /// `pricePaisa` stays the price Reception typed — selling price for pharmacy, cost for procedure products.
+  lotNo          String?      @db.VarChar(100)
+  distributor    String?
+  costPaisa      BigInt?
   status         IntakeStatus @default(PENDING)
   addedById      String
   createdAt      DateTime     @default(now())

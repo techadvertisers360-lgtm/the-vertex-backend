@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { onHand } from '../../src/services/stock';
-import { agentFor, call, prisma, uid } from './helpers';
+import { agentFor, call, newKey, prisma, uid } from './helpers';
 
 /** D-055 — developer uploads a CSV of procedure products or pharmacy products (with batches). */
 
@@ -85,5 +85,26 @@ describe('D-055 — stock CSV import', () => {
     for (const role of ['MANAGER', 'RECEPTIONIST', 'MD'] as const) {
       expect((await call((await agentFor(role)).agent).post('/api/developer/stock-import', { kind: 'PHARMACY', csv: PHARM_HEADER, dryRun: true })).status).toBe(403);
     }
+  });
+
+  it('D-057 — Reception adds with the CSV columns; the lists return them; the pharmacy batch keeps its number and distributor', async () => {
+    const t = uid();
+    const rec = call((await agentFor('RECEPTIONIST')).agent);
+    const mgr = call((await agentFor('MANAGER')).agent);
+    const details = { code: `R-${t}`, category: 'Consumables', department: 'Derma', procedureUse: 'PRP', packUnit: 'box', packSize: 50, itemType: 'Disposable', sterile: true, note: 'Small' };
+    const only = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Needle ${t}`, quantity: 0, pricePaisa: 0, unit: 'piece', details }, newKey());
+    expect(only.status, JSON.stringify(only.body)).toBe(201);
+    expect(only.body.intakeId).toBeNull();
+    const proc = await rec.get('/api/reception/stock?kind=PROCEDURE');
+    expect(proc.body.items.find((i: { name: string }) => i.name === `Needle ${t}`)).toMatchObject({ ...details, unit: 'piece', onHand: 0, low: false });
+
+    const add = await rec.post('/api/reception/stock', { kind: 'PHARMACY', name: `Serum ${t}`, quantity: 4, pricePaisa: 250_000, costPaisa: 150_000, lotNo: `LOT-${t}`, distributor: `Dist ${t}`, unit: 'bottle', expiryDate: '2031-01-31' }, newKey());
+    expect(add.status).toBe(201);
+    expect((await mgr.post(`/api/reception/stock-intakes/${add.body.intakeId}/verify`)).status).toBe(200);
+    const ph = await rec.get('/api/reception/stock?kind=PHARMACY');
+    expect(ph.body.items.find((i: { name: string }) => i.name === `Serum ${t}`)).toMatchObject({
+      salePricePaisa: 250_000,
+      batches: [{ lotNo: `LOT-${t}`, distributor: `Dist ${t}`, costPaisa: 150_000, quantity: 4, expiryDate: '2031-01-31' }],
+    });
   });
 });

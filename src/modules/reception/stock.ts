@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { StockKind } from '@prisma/client';
+import type { StockItem, StockKind } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors';
 import { clinicDateStr, dateOnly, dateOnlyStr } from '../../lib/time';
@@ -20,13 +20,14 @@ export async function list(kind: StockKind) {
   const items = await prisma.stockItem.findMany({ where: { kind }, orderBy: [{ active: 'desc' }, { name: 'asc' }] });
   const pending = await prisma.stockIntake.groupBy({ by: ['itemId'], where: { status: 'PENDING', itemId: { in: items.map((i) => i.id) } }, _sum: { quantity: true } });
   const today = clinicDateStr(new Date());
+  const vendors = await prisma.vendor.findMany({ select: { id: true, name: true } });
   return {
     kind,
     items: await Promise.all(
       items.map(async (i) => {
         const [usable, batches, balances, hand] = await Promise.all([
           usableBatches(prisma, i.id),
-          prisma.stockBatch.findMany({ where: { itemId: i.id }, orderBy: { createdAt: 'desc' } }),
+          prisma.stockBatch.findMany({ where: { itemId: i.id }, orderBy: [{ expiryDate: 'asc' }, { createdAt: 'desc' }] }),
           batchBalances(prisma, i.id),
           onHand(prisma, i.id),
         ]);
@@ -36,6 +37,26 @@ export async function list(kind: StockKind) {
           id: i.id,
           name: i.name,
           unit: i.baseUnit,
+          // the columns of the stock CSV (D-055 / D-057)
+          code: i.code,
+          category: i.category,
+          department: i.department,
+          procedureUse: i.procedureUse,
+          packUnit: i.packUnit,
+          packSize: i.packSize,
+          itemType: i.itemType,
+          sterile: i.sterile,
+          note: i.note,
+          salePricePaisa: i.salePricePaisa,
+          /** Batches with stock left (pharmacy table: one row per batch). */
+          batches: live.map((b) => ({
+            id: b.id,
+            lotNo: b.lotNo,
+            distributor: (b.vendorId && vendors.find((v) => v.id === b.vendorId)?.name) || null,
+            costPaisa: b.unitCostPaisa,
+            quantity: balances.get(b.id) ?? 0,
+            expiryDate: b.expiryDate ? dateOnlyStr(b.expiryDate) : null,
+          })),
           active: i.active,
           minQty: i.minQty,
           onHand: hand,
@@ -60,6 +81,44 @@ export interface AddStockInput {
   unit?: string;
   expiryDate?: string;
   minQty?: number;
+  /** Pharmacy (D-057): batch number, distributor and purchase price per unit; `pricePaisa` is the selling price. */
+  lotNo?: string;
+  distributor?: string;
+  costPaisa?: number;
+  /** Procedure catalogue fields (D-057), as in the stock CSV. */
+  details?: ProductDetails;
+}
+
+export interface ProductDetails {
+  code?: string;
+  category?: string;
+  department?: string;
+  procedureUse?: string;
+  packUnit?: string;
+  packSize?: number;
+  itemType?: string;
+  sterile?: boolean;
+  note?: string;
+}
+
+type DetailFields = Pick<StockItem, 'code' | 'category' | 'department' | 'procedureUse' | 'packUnit' | 'packSize' | 'itemType' | 'sterile' | 'note'>;
+const NO_DETAILS: DetailFields = { code: null, category: '', department: null, procedureUse: null, packUnit: null, packSize: null, itemType: null, sterile: null, note: null };
+
+/** Only the fields that were filled in and differ from the product (a blank never wipes a value). */
+function detailChanges(item: DetailFields, d: ProductDetails = {}): Partial<DetailFields> {
+  const t = (v?: string) => v?.trim().replace(/\s+/g, ' ') || undefined;
+  const want: Partial<DetailFields> = {
+    code: t(d.code),
+    category: t(d.category),
+    department: t(d.department),
+    procedureUse: t(d.procedureUse),
+    packUnit: t(d.packUnit),
+    packSize: d.packSize || undefined,
+    itemType: t(d.itemType),
+    sterile: d.sterile,
+    note: t(d.note),
+  };
+  return Object.fromEntries(Object.entries(want).filter(([k, v]) => v !== undefined && v !== item[k as keyof DetailFields]));
 }
 
 /**
@@ -69,28 +128,50 @@ export interface AddStockInput {
 export async function addStock(actor: Actor, input: AddStockInput, idempotencyKey: string) {
   const name = input.name.trim().replace(/\s+/g, ' ');
   if (name.length < 2) throw new ValidationError('Product ka naam likhein.');
-  if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new ValidationError('Quantity sahi likhein.');
+  if (!Number.isSafeInteger(input.quantity) || input.quantity < 0) throw new ValidationError('Quantity sahi likhein.');
+  if (input.costPaisa !== undefined && (!Number.isSafeInteger(input.costPaisa) || input.costPaisa < 0)) throw new ValidationError('Purchase price sahi likhein.');
   if (!Number.isSafeInteger(input.pricePaisa) || input.pricePaisa < 0) throw new ValidationError('Price sahi likhein.');
   if (input.expiryDate && input.expiryDate < clinicDateStr(new Date())) throw new ValidationError('Expiry date guzar chuki hai.');
   const key = `intake:${idempotencyKey}`;
   return prisma.$transaction(async (tx) => {
     const replay = await tx.stockIntake.findUnique({ where: { idempotencyKey: key } });
     if (replay) return { itemId: replay.itemId, intakeId: replay.id, status: replay.status, replayed: true };
+    const code = input.kind === 'PROCEDURE' ? input.details?.code?.trim() : undefined;
+    if (code) {
+      const owner = await tx.stockItem.findUnique({ where: { code }, select: { name: true } });
+      if (owner && owner.name.toLowerCase() !== name.toLowerCase()) throw new ConflictError('ITEM_CODE_TAKEN', `Item ID "${code}" pehle se "${owner.name}" ka hai.`);
+    }
 
     let item = await tx.stockItem.findFirst({ where: { name } });
     if (item && item.kind !== input.kind) throw new ConflictError('ITEM_OTHER_CATEGORY', `"${item.name}" pehle se ${KIND_LABEL[item.kind]} mein hai.`);
     if (!item) {
-      item = await tx.stockItem.create({ data: { name, kind: input.kind, category: KIND_LABEL[input.kind], baseUnit: input.unit?.trim() || 'piece', minQty: input.minQty ?? 0 } });
+      const d = input.kind === 'PROCEDURE' ? detailChanges(NO_DETAILS, input.details) : {};
+      item = await tx.stockItem.create({ data: { name, kind: input.kind, category: KIND_LABEL[input.kind], baseUnit: input.unit?.trim() || 'piece', minQty: input.minQty ?? 0, ...d } });
       await audit(tx, actor, { action: 'STOCK_ITEM_CREATED', recordType: 'StockItem', recordId: item.id, after: item });
-    } else if (input.minQty !== undefined && input.minQty !== item.minQty) {
-      const before = item;
-      item = await tx.stockItem.update({ where: { id: item.id }, data: { minQty: input.minQty } });
-      await audit(tx, actor, { action: 'STOCK_ITEM_UPDATED', recordType: 'StockItem', recordId: item.id, before, after: item });
+    } else {
+      const data = { ...(input.kind === 'PROCEDURE' ? detailChanges(item, input.details) : {}), ...(input.minQty !== undefined && input.minQty !== item.minQty ? { minQty: input.minQty } : {}) };
+      if (Object.keys(data).length) {
+        const before = item;
+        item = await tx.stockItem.update({ where: { id: item.id }, data });
+        await audit(tx, actor, { action: 'STOCK_ITEM_UPDATED', recordType: 'StockItem', recordId: item.id, before, after: item });
+      }
     }
+    // Quantity 0: the product (and its details) only — nothing for the Manager to verify.
+    if (input.quantity === 0) return { itemId: item.id, intakeId: null, status: null, replayed: false };
     const intake = await tx.stockIntake.create({
-      data: { itemId: item.id, quantity: input.quantity, pricePaisa: BigInt(input.pricePaisa), expiryDate: input.expiryDate ? dateOnly(input.expiryDate) : null, addedById: actor.id!, idempotencyKey: key },
+      data: {
+        itemId: item.id,
+        quantity: input.quantity,
+        pricePaisa: BigInt(input.pricePaisa),
+        expiryDate: input.expiryDate ? dateOnly(input.expiryDate) : null,
+        lotNo: input.lotNo?.trim() || null,
+        distributor: input.distributor?.trim().replace(/\s+/g, ' ') || null,
+        costPaisa: input.kind === 'PHARMACY' && input.costPaisa !== undefined ? BigInt(input.costPaisa) : null,
+        addedById: actor.id!,
+        idempotencyKey: key,
+      },
     });
-    await audit(tx, actor, { action: 'STOCK_INTAKE_ADDED', recordType: 'StockIntake', recordId: intake.id, after: { itemId: item.id, name: item.name, kind: item.kind, quantity: input.quantity, pricePaisa: input.pricePaisa, expiryDate: input.expiryDate ?? null } });
+    await audit(tx, actor, { action: 'STOCK_INTAKE_ADDED', recordType: 'StockIntake', recordId: intake.id, after: { itemId: item.id, name: item.name, kind: item.kind, quantity: input.quantity, pricePaisa: input.pricePaisa, expiryDate: input.expiryDate ?? null, lotNo: intake.lotNo, distributor: intake.distributor, costPaisa: intake.costPaisa } });
     await notifyRoles(tx, ['MANAGER'], {
       type: 'STOCK_INTAKE_PENDING',
       subject: `Stock verify karein: ${item.name} × ${input.quantity}`,
@@ -127,6 +208,9 @@ export async function intakes(scope: 'pending' | 'recent') {
       pricePaisa: r.pricePaisa,
       currentSalePricePaisa: r.item.kind === 'PHARMACY' ? r.item.salePricePaisa : null,
       expiryDate: r.expiryDate ? dateOnlyStr(r.expiryDate) : null,
+      lotNo: r.lotNo,
+      distributor: r.distributor,
+      costPaisa: r.costPaisa,
       status: r.status,
       addedBy: name(r.addedById),
       addedAt: r.createdAt,
@@ -151,16 +235,24 @@ export async function verifyIntake(actor: Actor, id: string) {
     await tx.$queryRaw`SELECT id FROM stock_items WHERE id = ${intake.itemId} FOR UPDATE`;
     const item = await tx.stockItem.findUniqueOrThrow({ where: { id: intake.itemId } });
     const n = (await tx.stockBatch.count({ where: { itemId: item.id } })) + 1;
+    let vendorId: string | null = null;
+    if (intake.distributor) {
+      const v = (await tx.vendor.findUnique({ where: { name: intake.distributor } })) ?? (await tx.vendor.create({ data: { name: intake.distributor } }));
+      vendorId = v.id;
+    }
+    // The typed batch number is kept; a second entry with the same number for this product gets a suffix.
+    const taken = intake.lotNo ? await tx.stockBatch.findUnique({ where: { itemId_lotNo: { itemId: item.id, lotNo: intake.lotNo } } }) : null;
     const batch = await tx.stockBatch.create({
       data: {
         itemId: item.id,
-        lotNo: `R${clinicDateStr(new Date()).replace(/-/g, '')}-${n}-${randomUUID().slice(0, 4)}`,
+        lotNo: intake.lotNo && !taken ? intake.lotNo : `${intake.lotNo ? `${intake.lotNo}-` : 'R'}${clinicDateStr(new Date()).replace(/-/g, '')}-${n}-${randomUUID().slice(0, 4)}`,
         expiryDate: intake.expiryDate,
-        unitCostPaisa: item.kind === 'PROCEDURE' ? intake.pricePaisa : null,
+        vendorId,
+        unitCostPaisa: item.kind === 'PROCEDURE' ? intake.pricePaisa : intake.costPaisa,
       },
     });
     await tx.stockTransaction.create({
-      data: { itemId: item.id, batchId: batch.id, type: 'STOCK_IN', quantity: intake.quantity, unitCostPaisa: batch.unitCostPaisa, actorId: actor.id!, reason: `Reception stock-in, verified by Manager`, idempotencyKey: `intake:${intake.id}:in` },
+      data: { itemId: item.id, batchId: batch.id, type: 'STOCK_IN', quantity: intake.quantity, unitCostPaisa: batch.unitCostPaisa, vendorId, actorId: actor.id!, reason: `Reception stock-in, verified by Manager`, idempotencyKey: `intake:${intake.id}:in` },
     });
     if (item.kind === 'PHARMACY' && item.salePricePaisa !== intake.pricePaisa) await tx.stockItem.update({ where: { id: item.id }, data: { salePricePaisa: intake.pricePaisa, active: true } });
     else if (!item.active) await tx.stockItem.update({ where: { id: item.id }, data: { active: true } });
