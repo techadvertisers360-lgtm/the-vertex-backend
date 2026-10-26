@@ -47,3 +47,13 @@ describe('Developer stock CSV import — parsing (D-055)', () => {
     expect(parsePharmacyCsv('Name\nX').missing).toEqual(['Quantity']);
   });
 });
+
+describe('Procedure / service list CSV — parsing (D-060)', () => {
+  it('reads Category, Procedure / Service, Source, Note in any order; the name is required', async () => {
+    const { parseServiceCsv } = await import('../../src/modules/developer/stockImportParse');
+    const p = parseServiceCsv('Note,Procedure / Service,Category,Source\nTwo sessions,Hydrafacial,Facials,In-house\n,,Laser,');
+    expect(p.rows).toEqual([{ row: 2, name: 'Hydrafacial', category: 'Facials', source: 'In-house', note: 'Two sessions' }]);
+    expect(p.errors.map((e) => e.row)).toEqual([3]);
+    expect(parseServiceCsv('Category,Name\nA,B').missing).toEqual(['Procedure / Service']);
+  });
+});

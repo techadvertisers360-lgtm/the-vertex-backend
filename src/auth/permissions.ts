@@ -55,6 +55,7 @@ export const PERMISSIONS = [
   'requests:inbox', // complaints/leave addressed to me or my role
   'stock:manage',
   'stock:reception', // Reception "Stock & batches": procedure + pharmacy products (D-048)
+  'services:reception', // Reception "Procedures & Services" list: view, add, edit, hide (D-060)
   'stock:approve_manager', // ≤ threshold
   'stock:approve_md', // > threshold
   'cash:closing',
@@ -103,6 +104,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reception:assign_procedure',
     'reception:feedback',
     'stock:reception',
+    'services:reception',
     'complaints:patient',
     'offers:read',
   ],
@@ -212,6 +214,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'upcoming', label: 'Upcoming Procedures', path: '/reception/upcoming', permission: 'reception:assign_procedure' },
     { key: 'billing', label: 'Billing', path: '/reception/billing', permission: 'reception:billing' },
     { key: 'stock', label: 'Stock & batches', path: '/reception/stock', permission: 'stock:reception' },
+    { key: 'services', label: 'Procedures & Services', path: '/reception/services', permission: 'services:reception' },
     { key: 'done', label: 'Patient Done', path: '/reception/done', permission: 'reception:checkin' },
     { key: 'staff', label: 'Staff Actions', path: '/reception/staff', permission: 'attendance:own' },
   ],
@@ -278,6 +281,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'accounts', label: 'Staff Accounts', path: '/developer', permission: 'developer:console' },
     { key: 'issues', label: 'Problems', path: '/developer/issues', permission: 'developer:console' },
     { key: 'stock-import', label: 'Stock CSV import', path: '/developer/stock-import', permission: 'developer:console' },
+    { key: 'service-import', label: 'Procedures / Services import', path: '/developer/service-import', permission: 'developer:console' },
     { key: 'audit', label: 'Audit & History', path: '/developer/audit', permission: 'audit:search' },
     { key: 'settings', label: 'Settings', path: '/developer/settings', permission: 'settings:manage' },
   ],

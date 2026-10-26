@@ -69,8 +69,16 @@ export const PHARMACY_COLUMNS = {
   expiry: 'Expiration Date',
 } as const;
 
-export type ImportKind = 'PROCEDURE' | 'PHARMACY';
-const REQUIRED: Record<ImportKind, string[]> = { PROCEDURE: ['name'], PHARMACY: ['name', 'quantity'] };
+/** Procedure / service list (D-060): becomes the `Service` catalogue used in booking and treatment plans. */
+export const SERVICE_COLUMNS = {
+  category: 'Category',
+  name: 'Procedure / Service',
+  source: 'Source',
+  note: 'Note',
+} as const;
+
+export type ImportKind = 'PROCEDURE' | 'PHARMACY' | 'SERVICE';
+const REQUIRED: Record<ImportKind, string[]> = { PROCEDURE: ['name'], PHARMACY: ['name', 'quantity'], SERVICE: ['name'] };
 
 export interface RowIssue {
   row: number;
@@ -298,6 +306,32 @@ export function parsePharmacyCsv(text: string): Parsed<PharmacyRow> {
       quantity,
       expiry,
     });
+  }
+  return { rows, errors, missing, dataRows: body.length };
+}
+
+export interface ServiceRow {
+  row: number;
+  name: string;
+  category: string | null;
+  source: string | null;
+  note: string | null;
+}
+
+export function parseServiceCsv(text: string): Parsed<ServiceRow> {
+  const { header, body } = split(text);
+  const { idx, missing } = resolve(header, SERVICE_COLUMNS, 'SERVICE');
+  if (missing.length) return { rows: [], errors: [], missing, dataRows: body.length };
+  const rows: ServiceRow[] = [];
+  const errors: RowIssue[] = [];
+  const get = (cells: string[], k: keyof typeof SERVICE_COLUMNS) => (idx[k] >= 0 ? clean(cells[idx[k]]) : '');
+  for (const { row, cells } of body) {
+    const name = get(cells, 'name');
+    if (name.length < 2) {
+      errors.push({ row, message: `"${SERVICE_COLUMNS.name}" khaali hai.` });
+      continue;
+    }
+    rows.push({ row, name: name.slice(0, 191), category: get(cells, 'category').slice(0, 191) || null, source: get(cells, 'source').slice(0, 191) || null, note: get(cells, 'note') || null });
   }
   return { rows, errors, missing, dataRows: body.length };
 }

@@ -90,13 +90,14 @@ developerRouter.get(
 );
 
 /**
- * Stock CSV import (D-055): procedure product catalogue or pharmacy products with batches. `dryRun: true` checks the
+ * Stock CSV import (D-055): procedure product catalogue or pharmacy products with batches; or the procedure /
+ * service list (D-060). `dryRun: true` checks the
  * file and shows what would change; the real run writes it. Safe to repeat — nothing already imported is added twice.
  */
 developerRouter.post(
   '/stock-import',
   route(
-    { permission: P, body: z.object({ kind: z.enum(['PROCEDURE', 'PHARMACY']), csv: z.string().min(1).max(1_000_000), fileName: z.string().trim().max(200).optional(), dryRun: z.boolean().default(true) }) },
+    { permission: P, body: z.object({ kind: z.enum(['PROCEDURE', 'PHARMACY', 'SERVICE']), csv: z.string().min(1).max(1_000_000), fileName: z.string().trim().max(200).optional(), dryRun: z.boolean().default(true) }) },
     async ({ actor, body }) => importStock(actor, body),
   ),
 );

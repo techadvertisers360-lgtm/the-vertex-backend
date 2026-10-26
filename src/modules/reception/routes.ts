@@ -5,6 +5,7 @@ import { idParam, route } from '../../middleware/route';
 import * as svc from './service';
 import * as pharmacy from './pharmacy';
 import * as rstock from './stock';
+import * as services from './services';
 
 /** Receptionist endpoints (spec §9). Manager may use the read views too. */
 export const receptionRouter = Router();
@@ -237,6 +238,28 @@ receptionRouter.patch(
       }),
     },
     async ({ actor, params, body }) => rstock.updateProduct(actor, params.id, body),
+  ),
+);
+
+// ───────────── Procedures & Services list (D-060) ─────────────
+const svcText = (max: number) => z.string().trim().max(max).nullable().optional();
+receptionRouter.get('/services', route({ permission: 'services:reception' }, async () => services.list()));
+receptionRouter.post(
+  '/services',
+  route(
+    { permission: 'services:reception', status: 201, body: z.object({ name: z.string().trim().min(2).max(191), category: svcText(191), source: svcText(191), note: svcText(2000) }) },
+    async ({ actor, body }) => services.add(actor, body),
+  ),
+);
+receptionRouter.patch(
+  '/services/:id',
+  route(
+    {
+      permission: 'services:reception',
+      params: idParam,
+      body: z.object({ name: z.string().trim().min(2).max(191).optional(), category: svcText(191), source: svcText(191), note: svcText(2000), active: z.boolean().optional() }),
+    },
+    async ({ actor, params, body }) => services.update(actor, params.id, body),
   ),
 );
 

@@ -634,6 +634,10 @@ model Service {
   type              AppointmentType
   durationMin       Int? // overrides scheduling.*DurationMin setting
   defaultPricePaisa BigInt?
+  /// Procedure / service list columns (D-060): from the developer's CSV or added by Reception.
+  category          String?
+  source            String?
+  note              String?         @db.Text
   active            Boolean         @default(true)
   createdAt         DateTime        @default(now())
 

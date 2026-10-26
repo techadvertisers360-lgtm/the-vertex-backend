@@ -4,7 +4,7 @@ import { ValidationError } from '../../lib/errors';
 import { sha256 } from '../../lib/misc';
 import { clinicDateStr, dateOnly } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
-import { PHARMACY_COLUMNS, PROCEDURE_COLUMNS, parsePharmacyCsv, parseProcedureCsv, type ImportKind, type RowIssue } from './stockImportParse';
+import { PHARMACY_COLUMNS, PROCEDURE_COLUMNS, SERVICE_COLUMNS, parsePharmacyCsv, parseProcedureCsv, parseServiceCsv, type ImportKind, type RowIssue } from './stockImportParse';
 
 /**
  * Developer CSV stock import (client 2026-10-26, D-055). Procedure file = the product catalogue (no quantities);
@@ -35,11 +35,12 @@ export interface ImportResult {
 const key = (s: string) => s.trim().toLowerCase();
 
 function missingHeaders(kind: ImportKind, missing: string[]): never {
-  const cols = Object.values(kind === 'PROCEDURE' ? PROCEDURE_COLUMNS : PHARMACY_COLUMNS).join(', ');
+  const cols = Object.values(kind === 'PROCEDURE' ? PROCEDURE_COLUMNS : kind === 'SERVICE' ? SERVICE_COLUMNS : PHARMACY_COLUMNS).join(', ');
   throw new ValidationError(`CSV mein yeh column nahi mila: ${missing.join(', ')}. Pehli row mein column ke naam hon: ${cols}.`, { missing });
 }
 
 export async function importStock(actor: Actor, input: { kind: ImportKind; csv: string; fileName?: string; dryRun: boolean }): Promise<ImportResult> {
+  if (input.kind === 'SERVICE') return importServices(actor, input);
   return input.kind === 'PROCEDURE' ? importProcedure(actor, input) : importPharmacy(actor, input);
 }
 
@@ -304,5 +305,87 @@ async function importPharmacy(actor: Actor, input: { csv: string; fileName?: str
       reason,
     });
   });
+  return result;
+}
+
+/**
+ * Procedure / service list (D-060) → the `Service` catalogue (booking and treatment-plan pickers). Matched by name;
+ * a filled cell updates the saved value, a blank one never wipes it. New entries are procedures (type PROCEDURE)
+ * with the default duration.
+ */
+async function importServices(actor: Actor, input: { csv: string; fileName?: string; dryRun: boolean }): Promise<ImportResult> {
+  const parsed = parseServiceCsv(input.csv);
+  if (parsed.missing.length) missingHeaders('SERVICE', parsed.missing);
+  const errors = [...parsed.errors];
+  const warnings: RowIssue[] = [];
+  const merged = new Map<string, (typeof parsed.rows)[number]>();
+  for (const r of parsed.rows) {
+    const m = merged.get(key(r.name));
+    if (!m) merged.set(key(r.name), { ...r });
+    else {
+      m.category ??= r.category;
+      m.source ??= r.source;
+      m.note ??= r.note;
+      warnings.push({ row: r.row, message: `${r.name}: file mein dobara hai — row ${m.row} ke saath mila diya.` });
+    }
+  }
+  const rows = [...merged.values()];
+  const existing = rows.length ? await prisma.service.findMany({ where: { name: { in: rows.map((r) => r.name) } } }) : [];
+  const byName = new Map(existing.map((x) => [key(x.name), x]));
+  const creates: Prisma.ServiceCreateManyInput[] = [];
+  const updates: { before: (typeof existing)[number]; data: Prisma.ServiceUpdateInput }[] = [];
+  const preview: ImportResult['preview'] = [];
+  let same = 0;
+  for (const r of rows) {
+    const match = byName.get(key(r.name));
+    if (!match) {
+      creates.push({ name: r.name, type: 'PROCEDURE', category: r.category, source: r.source, note: r.note });
+      preview.push({ row: r.row, name: r.name, detail: [r.category, r.source].filter(Boolean).join(' · '), action: 'NEW' });
+      continue;
+    }
+    const data: Prisma.ServiceUpdateInput = {
+      ...(r.category && r.category !== match.category ? { category: r.category } : {}),
+      ...(r.source && r.source !== match.source ? { source: r.source } : {}),
+      ...(r.note && r.note !== match.note ? { note: r.note } : {}),
+    };
+    if (Object.keys(data).length) {
+      updates.push({ before: match, data });
+      preview.push({ row: r.row, name: r.name, detail: `Badlega: ${Object.keys(data).join(', ')}`, action: 'UPDATE' });
+    } else {
+      same++;
+      preview.push({ row: r.row, name: r.name, detail: 'Pehle se bilkul aisa hai', action: 'SAME' });
+    }
+  }
+  const result: ImportResult = {
+    kind: 'SERVICE',
+    dryRun: input.dryRun,
+    dataRows: parsed.dataRows,
+    products: { new: creates.length, updated: updates.length, same },
+    batches: { new: 0, existing: 0 },
+    vendorsNew: 0,
+    quantityIn: 0,
+    errors: errors.sort((a, b) => a.row - b.row),
+    warnings: warnings.sort((a, b) => a.row - b.row),
+    preview: preview.sort((a, b) => a.row - b.row).slice(0, PREVIEW_MAX),
+  };
+  if (input.dryRun || (!creates.length && !updates.length)) return result;
+
+  await prisma.$transaction(async (tx) => {
+    if (creates.length) await tx.service.createMany({ data: creates, skipDuplicates: true });
+    await audit(tx, actor, {
+      action: 'SERVICE_CSV_IMPORTED',
+      recordType: 'Service',
+      after: { fileName: input.fileName ?? null, rows: parsed.dataRows, created: creates.map((c) => c.name), updated: updates.length, errors: errors.length },
+    });
+  });
+  for (let i = 0; i < updates.length; i += UPDATE_CHUNK) {
+    const chunk = updates.slice(i, i + UPDATE_CHUNK);
+    await prisma.$transaction(async (tx) => {
+      for (const u of chunk) {
+        const after = await tx.service.update({ where: { id: u.before.id }, data: u.data });
+        await audit(tx, actor, { action: 'SERVICE_UPDATED', recordType: 'Service', recordId: after.id, before: u.before, after, reason: `CSV import${input.fileName ? ` (${input.fileName})` : ''}` });
+      }
+    });
+  }
   return result;
 }
