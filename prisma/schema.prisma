@@ -1377,6 +1377,13 @@ model StockItem {
   /// Pharmacy selling price per base unit (D-048); procedure products carry cost on their batches instead.
   salePricePaisa    BigInt?
   preferredVendorId String?
+  /// Procedure catalogue fields from the developer's CSV import (D-055); all optional.
+  code              String?   @unique @db.VarChar(64)
+  department        String?
+  procedureUse      String?   @db.Text
+  itemType          String?
+  sterile           Boolean?
+  note              String?   @db.Text
   active            Boolean   @default(true)
   /// Set when the low-stock alert is sent; cleared when stock is back above minimum (one alert per episode, D-037).
   lowStockAlertedAt DateTime?

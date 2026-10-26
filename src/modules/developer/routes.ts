@@ -6,6 +6,7 @@ import { prisma } from '../../lib/prisma';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import { audit } from '../../services/audit';
 import { ROLE_HOME } from '../../auth/permissions';
+import { importStock } from './stockImport';
 
 /**
  * Hidden developer console (D-043). Account create / edit / temporary password use /api/users (the developer holds
@@ -86,4 +87,16 @@ developerRouter.get(
       next: rows.length === 100 ? Number(rows[rows.length - 1]!.id) : null,
     };
   }),
+);
+
+/**
+ * Stock CSV import (D-055): procedure product catalogue or pharmacy products with batches. `dryRun: true` checks the
+ * file and shows what would change; the real run writes it. Safe to repeat — nothing already imported is added twice.
+ */
+developerRouter.post(
+  '/stock-import',
+  route(
+    { permission: P, body: z.object({ kind: z.enum(['PROCEDURE', 'PHARMACY']), csv: z.string().min(1).max(1_000_000), fileName: z.string().trim().max(200).optional(), dryRun: z.boolean().default(true) }) },
+    async ({ actor, body }) => importStock(actor, body),
+  ),
 );
