@@ -47,7 +47,7 @@ export async function dashboard(actor: Actor) {
 
   // Low stock: ledger sum ≤ minimum
   const [items, sums] = await Promise.all([prisma.stockItem.findMany({ where: { active: true }, select: { id: true, name: true, minQty: true } }), prisma.stockTransaction.groupBy({ by: ['itemId'], _sum: { quantity: true } })]);
-  const lowStock = items.filter((i) => (sums.find((s) => s.itemId === i.id)?._sum.quantity ?? 0) <= i.minQty);
+  const lowStock = items.filter((i) => i.minQty > 0 && (sums.find((s) => s.itemId === i.id)?._sum.quantity ?? 0) <= i.minQty);
 
   const name = (id: string | null) => (id ? (staff.find((u) => u.id === id)?.displayName ?? '—') : '—');
   const present = attendance.filter((a) => !a.checkOutAt);

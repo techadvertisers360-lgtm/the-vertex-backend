@@ -85,7 +85,7 @@ export async function checkLowStock(tx: Tx, itemId: string): Promise<void> {
   const item = await tx.stockItem.findUnique({ where: { id: itemId } });
   if (!item || !item.active) return;
   const left = await onHand(tx, itemId);
-  if (left > item.minQty) {
+  if (item.minQty <= 0 || left > item.minQty) {
     if (item.lowStockAlertedAt) await tx.stockItem.update({ where: { id: itemId }, data: { lowStockAlertedAt: null } });
     return;
   }

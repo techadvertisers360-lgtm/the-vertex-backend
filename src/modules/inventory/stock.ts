@@ -37,7 +37,7 @@ export async function overview() {
       preferredVendor: vendors.find((v) => v.id === i.preferredVendorId)?.name ?? null,
       onHand: hand,
       usable: usable.reduce((s, b) => s + b.balance, 0),
-      low: hand <= i.minQty,
+      low: i.minQty > 0 && hand <= i.minQty, // no minimum set (0) = no low-stock flag (D-056)
       expired: live.filter((b) => b.expiryDate && dateOnlyStr(b.expiryDate) <= today).reduce((s, b) => s + (balances.get(b.id) ?? 0), 0),
       quarantined: live.filter((b) => b.status === 'QUARANTINED').reduce((s, b) => s + (balances.get(b.id) ?? 0), 0),
       nearExpiry: live.filter((b) => b.expiryDate && dateOnlyStr(b.expiryDate) > today && dateOnlyStr(b.expiryDate) <= alertBy).length,

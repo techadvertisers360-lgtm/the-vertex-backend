@@ -40,7 +40,7 @@ export async function list(kind: StockKind) {
           minQty: i.minQty,
           onHand: hand,
           usable: usable.reduce((s, b) => s + b.balance, 0),
-          low: hand <= i.minQty,
+          low: i.minQty > 0 && hand <= i.minQty, // no minimum set (0) = no low-stock flag (D-056)
           pricePaisa: kind === 'PHARMACY' ? i.salePricePaisa : (batches.find((b) => b.unitCostPaisa !== null)?.unitCostPaisa ?? null),
           nextExpiry: expiries[0] ?? null,
           /** Added by Reception, waiting for the Manager's verification (D-052) — not in stock yet. */
