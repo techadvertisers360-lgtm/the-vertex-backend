@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCsv, parseExpiry, parseMoneyCell, parsePharmacyCsv, parseProcedureCsv } from '../../src/modules/developer/stockImportParse';
+import { parseCsv, parseExpiry, parseMoneyCell, parsePharmacyCsv, parseProcedureCsv, parseServiceCsv } from '../../src/modules/developer/stockImportParse';
 
 describe('Developer stock CSV import — parsing (D-055)', () => {
   it('parses quoted cells, escaped quotes, commas / newlines inside quotes, CRLF and a BOM', () => {
@@ -49,8 +49,7 @@ describe('Developer stock CSV import — parsing (D-055)', () => {
 });
 
 describe('Procedure / service list CSV — parsing (D-060)', () => {
-  it('reads Category, Procedure / Service, Source, Note in any order; the name is required', async () => {
-    const { parseServiceCsv } = await import('../../src/modules/developer/stockImportParse');
+  it('reads Category, Procedure / Service, Source, Note in any order; the name is required', () => {
     const p = parseServiceCsv('Note,Procedure / Service,Category,Source\nTwo sessions,Hydrafacial,Facials,In-house\n,,Laser,');
     expect(p.rows).toEqual([{ row: 2, name: 'Hydrafacial', category: 'Facials', source: 'In-house', note: 'Two sessions' }]);
     expect(p.errors.map((e) => e.row)).toEqual([3]);
