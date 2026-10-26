@@ -201,7 +201,7 @@ describe('idempotency middleware (spec §22)', () => {
     const probe = express();
     probe.use(express.json());
     probe.use((req, _res, next) => {
-      req.user = { id: user.id, role: user.role, displayName: user.displayName, sessionId: 'probe' };
+      req.user = { id: user.id, role: user.role, displayName: user.displayName, sessionId: 'probe', geo: { required: false, claimUntil: null } };
       req.actor = { id: user.id, role: user.role, displayName: user.displayName };
       next();
     });

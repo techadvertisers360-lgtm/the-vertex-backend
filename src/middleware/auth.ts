@@ -5,6 +5,7 @@ import { AppError, UnauthorizedError } from '../lib/errors';
 import { ACCESS_COOKIE, verifyAccessToken } from '../auth/tokens';
 import { ACCOUNT_DISABLED_MSG } from '../auth/service';
 import type { Actor } from '../services/audit';
+import { OUTSIDE_MSG, requestAllowed } from '../services/geofence';
 
 export interface AuthUser {
   id: string;
@@ -13,6 +14,8 @@ export interface AuthUser {
   sessionId: string;
   /** Set while the hidden developer views the app as this user (D-043): every request is read-only. */
   impersonator?: { id: string; displayName: string };
+  /** Clinic-only switch and on-site claim of the person signed in (the developer's own while viewing as someone; D-062). */
+  geo: { required: boolean; claimUntil: Date | null };
 }
 
 declare module 'express-serve-static-core' {
@@ -29,11 +32,25 @@ declare module 'express-serve-static-core' {
  */
 export async function requireAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const user = await authenticate(req);
+  await requireOnSite(req, user);
   // Developer "view as" is read-only: nothing may be written in another person's name (D-043).
   if (user.impersonator && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !VIEW_AS_WRITABLE.has(`${req.method} ${req.baseUrl}${req.path}`)) {
     throw new AppError(403, 'VIEW_ONLY', 'Developer "view as" mode sirf dekhne ke liye hai — save ke liye Developer par wapas aayein.');
   }
   next();
+}
+
+/**
+ * Clinic location restriction (D-062): a user whose switch is on needs a live on-site claim for every API call. Not a
+ * ForbiddenError (that writes an audit row per call); blocked location checks are audited instead. The location
+ * check itself, the signed-in profile and the developer's geofence settings stay reachable so nobody is locked out.
+ */
+const GEOFENCE_OPEN = ['/api/me', '/api/geofence', '/api/developer/geofence'];
+
+export async function requireOnSite(req: Request, user: AuthUser): Promise<void> {
+  const path = `${req.baseUrl}${req.path}`.replace(/\/+$/, '');
+  if (GEOFENCE_OPEN.some((p) => path === p || path.startsWith(`${p}/`))) return;
+  if (!(await requestAllowed({ geofenceRequired: user.geo.required, claimUntil: user.geo.claimUntil }))) throw new AppError(403, 'GEOFENCE_REQUIRED', OUTSIDE_MSG);
 }
 
 /** The only writes allowed while viewing as someone: leaving that mode. */
@@ -61,23 +78,24 @@ export async function resolveSession(userId: string, sessionId: string, tokenVer
   const [user, session] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, role: true, active: true, tokenVersion: true, displayName: true },
+      select: { id: true, role: true, active: true, tokenVersion: true, displayName: true, geofenceRequired: true },
     }),
-    prisma.session.findUnique({ where: { id: sessionId }, select: { userId: true, revokedAt: true, expiresAt: true, impersonatedUserId: true } }),
+    prisma.session.findUnique({ where: { id: sessionId }, select: { userId: true, revokedAt: true, expiresAt: true, impersonatedUserId: true, geoClaimUntil: true } }),
   ]);
   if (!user || !session || session.userId !== user.id) throw new UnauthorizedError();
   if (!user.active) throw new UnauthorizedError(ACCOUNT_DISABLED_MSG, 'ACCOUNT_DISABLED');
   if (session.revokedAt || session.expiresAt < new Date() || user.tokenVersion !== tokenVersion) {
     throw new UnauthorizedError();
   }
+  const geo = { required: user.geofenceRequired, claimUntil: session.geoClaimUntil };
   if (session.impersonatedUserId && user.role === 'DEVELOPER') {
     const target = await prisma.user.findUnique({ where: { id: session.impersonatedUserId }, select: { id: true, role: true, active: true, displayName: true } });
     // A disabled / removed target simply ends "view as" for this request; the developer sees their own console.
     if (target && target.active && target.role !== 'DEVELOPER') {
-      return { id: target.id, role: target.role, displayName: target.displayName, sessionId, impersonator: { id: user.id, displayName: user.displayName } };
+      return { id: target.id, role: target.role, displayName: target.displayName, sessionId, impersonator: { id: user.id, displayName: user.displayName }, geo };
     }
   }
-  return { id: user.id, role: user.role, displayName: user.displayName, sessionId };
+  return { id: user.id, role: user.role, displayName: user.displayName, sessionId, geo };
 }
 
 /**

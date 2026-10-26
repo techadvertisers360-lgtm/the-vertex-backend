@@ -26,6 +26,7 @@ import { webhooksRouter } from './modules/messaging/webhooks';
 import { messagesRouter } from './modules/messaging/routes';
 import { cronRouter, realtimeRouter } from './modules/platform/routes';
 import { developerRouter } from './modules/developer/routes';
+import { geofenceRouter } from './modules/geofence/routes';
 import { relayAfterResponse } from './realtime/afterResponse';
 import { pushRouter } from './modules/push/routes';
 import { pushEnabled } from './services/push';
@@ -65,6 +66,7 @@ export const API_MOUNTS: [string, Router][] = [
   ['/stock', stockRouter],
   ['/realtime', realtimeRouter],
   ['/developer', developerRouter],
+  ['/geofence', geofenceRouter],
 ];
 
 /** Express app factory (no listen) so integration tests can drive it with supertest. */

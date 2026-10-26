@@ -45,7 +45,7 @@ export interface IssuedSession {
   sessionId: string;
 }
 
-async function issueSession(user: User, meta: { ip?: string; userAgent?: string }, carry: { impersonatedUserId?: string | null } = {}): Promise<IssuedSession> {
+async function issueSession(user: User, meta: { ip?: string; userAgent?: string }, carry: { impersonatedUserId?: string | null; geoClaimUntil?: Date | null } = {}): Promise<IssuedSession> {
   const refreshToken = randomToken(48);
   const refreshExpires = new Date(Date.now() + env.REFRESH_TTL_DAYS * 86400_000);
   const session = await prisma.session.create({
@@ -58,6 +58,8 @@ async function issueSession(user: User, meta: { ip?: string; userAgent?: string 
       userAgent: meta.userAgent?.slice(0, 512),
       // Developer "view as" survives token refresh (D-043); never carried for any other role.
       impersonatedUserId: user.role === 'DEVELOPER' ? (carry.impersonatedUserId ?? null) : null,
+      // The on-site claim (D-062) belongs to this sign-in; a token refresh keeps it until it expires.
+      geoClaimUntil: carry.geoClaimUntil ?? null,
     },
   });
   const accessToken = signAccessToken({ sub: user.id, sid: session.id, tv: user.tokenVersion });
@@ -106,7 +108,7 @@ export async function refresh(refreshToken: string, meta: { ip?: string; userAge
   if (!s.user.active) throw new UnauthorizedError(ACCOUNT_DISABLED_MSG, 'ACCOUNT_DISABLED');
   if (s.tokenVersion !== s.user.tokenVersion) throw new UnauthorizedError();
 
-  const next = await issueSession(s.user, meta, { impersonatedUserId: s.impersonatedUserId });
+  const next = await issueSession(s.user, meta, { impersonatedUserId: s.impersonatedUserId, geoClaimUntil: s.geoClaimUntil });
   // Only one concurrent refresh wins the rotation.
   const { count } = await prisma.session.updateMany({
     where: { id: s.id, revokedAt: null },

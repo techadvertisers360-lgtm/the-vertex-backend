@@ -6,7 +6,7 @@ import type { UploadRoute } from '@prisma/client';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/errors';
 import { logger } from '../../lib/misc';
-import { authenticate } from '../../middleware/auth';
+import { authenticate, requireOnSite } from '../../middleware/auth';
 import { authorizeUpload, recordUpload, UPLOAD_RULES } from '../../services/files';
 
 const f = createUploadthing();
@@ -26,7 +26,8 @@ function buildRoute(route: UploadRoute) {
     .input(targetInput)
     .middleware(async ({ req, input }) => {
       try {
-        await authenticate(req as Request);
+        const user = await authenticate(req as Request);
+        await requireOnSite(req as Request, user); // clinic-only users upload only on site (D-062)
         const actor = (req as Request).actor!;
         await authorizeUpload(actor, route, input);
         return { actorId: actor.id!, recordType: input.recordType, recordId: input.recordId };

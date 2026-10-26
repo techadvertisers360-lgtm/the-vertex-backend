@@ -365,6 +365,12 @@ model User {
   isDemo             Boolean  @default(false)
   /// Set when an admin gives a temporary password; the user must choose a new one on next sign-in (D-043).
   mustChangePassword Boolean  @default(false)
+  /// Developer switch (D-062): true = this person can use the app only at the clinic (when the geofence is on).
+  geofenceRequired   Boolean  @default(false)
+  /// Last location check only — no history (D-062): when, inside or not, distance in metres. Never coordinates.
+  geoLastCheckAt     DateTime?
+  geoLastInside      Boolean?
+  geoLastDistanceM   Int?
   createdById        String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -381,6 +387,21 @@ model User {
   @@map("users")
 }
 
+/// Clinic location restriction (D-062): one row (id 1), edited only by the developer. Placeholder defaults.
+model GeofenceConfig {
+  id          Int      @id @default(1)
+  enabled     Boolean  @default(false)
+  latitude    Float    @default(31.5020747)
+  longitude   Float    @default(74.4335575)
+  radiusM     Int      @default(200)
+  /// Clinic public IP addresses, one per line; a request from one of them counts as on site.
+  allowedIps  String?  @db.Text
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("geofence_config")
+}
+
 model Session {
   id                 String    @id @default(cuid())
   userId             String
@@ -391,6 +412,8 @@ model Session {
   replacedById       String?
   /// Developer "view as" (D-043): this session shows another user's screens, read-only.
   impersonatedUserId String?
+  /// On-site claim (D-062): API calls of a geofenced user are allowed until this time (15 min after a check).
+  geoClaimUntil      DateTime?
   userAgent          String?   @db.VarChar(512)
   ip                 String?
   createdAt          DateTime  @default(now())

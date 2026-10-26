@@ -7,6 +7,7 @@ import { NotFoundError, ValidationError } from '../../lib/errors';
 import { audit } from '../../services/audit';
 import { ROLE_HOME } from '../../auth/permissions';
 import { importStock } from './stockImport';
+import * as geofence from './geofence';
 
 /**
  * Hidden developer console (D-043). Account create / edit / temporary password use /api/users (the developer holds
@@ -100,4 +101,31 @@ developerRouter.post(
     { permission: P, body: z.object({ kind: z.enum(['PROCEDURE', 'PHARMACY', 'SERVICE']), csv: z.string().min(1).max(1_000_000), fileName: z.string().trim().max(200).optional(), dryRun: z.boolean().default(true) }) },
     async ({ actor, body }) => importStock(actor, body),
   ),
+);
+
+/** Clinic location restriction (D-062): settings and the per-user switch. Developer only; every change audited. */
+developerRouter.get('/geofence', route({ permission: P }, async () => geofence.overview()));
+developerRouter.put(
+  '/geofence',
+  route(
+    {
+      permission: P,
+      body: z.object({
+        enabled: z.boolean(),
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        radiusM: z.number().int().min(10).max(100_000),
+        allowedIps: z.array(z.string().trim().max(64)).max(50).default([]),
+      }),
+    },
+    async ({ actor, body }) => geofence.saveConfig(actor, body),
+  ),
+);
+developerRouter.patch(
+  '/geofence/users/:id',
+  route({ permission: P, params: z.object({ id: z.string().min(1).max(64) }), body: z.object({ required: z.boolean() }) }, async ({ actor, params, body }) => geofence.setUser(actor, params.id, body.required)),
+);
+developerRouter.post(
+  '/geofence/role',
+  route({ permission: P, body: z.object({ role: z.nativeEnum(Role), required: z.boolean() }) }, async ({ actor, body }) => geofence.setRole(actor, body.role, body.required)),
 );
