@@ -32,6 +32,10 @@ export async function daySummary(date?: string) {
     prisma.vendor.findMany({ where: { id: { in: supplierPayments.map((s) => s.vendorId) } }, select: { id: true, name: true } }),
   ]);
   const name = (id: string | null | undefined) => (id ? (cashiers.find((u) => u.id === id)?.displayName ?? null) : null);
+  // Which payments are walk-in counter sales (D-061), and the invoice each receipt belongs to.
+  const paidInvoices = await prisma.invoice.findMany({ where: { id: { in: [...new Set(payments.map((p) => p.invoiceId))] } }, select: { id: true, number: true, kind: true } });
+  const invoiceOf = (id: string) => paidInvoices.find((i) => i.id === id);
+  const counter = payments.filter((p) => invoiceOf(p.invoiceId)?.kind === 'COUNTER');
   const perCashier = [...new Set(payments.map((p) => p.cashierId))].map((id) => {
     const mine = payments.filter((p) => p.cashierId === id);
     return { cashierId: id, name: name(id), count: mine.length, totalPaisa: sumBy(mine, (p) => p.amountPaisa), cashPaisa: sumBy(mine.filter((p) => p.method === 'CASH'), (p) => p.amountPaisa) };
@@ -47,10 +51,17 @@ export async function daySummary(date?: string) {
       chequePaisa: byMethod('CHEQUE'),
     },
     discountsPaisa: sumBy(invoices, (i) => i.discountPaisa),
+    /** Walk-in pharmacy sales (D-061): already inside the collections above; shown separately with the cash / bank split. */
+    counterSales: {
+      count: new Set(counter.map((p) => p.invoiceId)).size,
+      totalPaisa: sumBy(counter, (p) => p.amountPaisa),
+      cashPaisa: sumBy(counter.filter((p) => p.method === 'CASH'), (p) => p.amountPaisa),
+      bankPaisa: sumBy(counter.filter((p) => p.method !== 'CASH'), (p) => p.amountPaisa),
+    },
     cash: { inPaisa: cashIn, outPaisa: cashOut, expectedPaisa: cashIn - cashOut },
     supplierPayments: supplierPayments.map((s) => ({ ...s, vendorName: vendors.find((v) => v.id === s.vendorId)?.name ?? null })),
     perCashier,
-    payments: payments.map((p) => ({ ...p, cashierName: name(p.cashierId) })),
+    payments: payments.map((p) => ({ ...p, cashierName: name(p.cashierId), invoiceNumber: invoiceOf(p.invoiceId)?.number ?? null, counterSale: invoiceOf(p.invoiceId)?.kind === 'COUNTER' })),
     closing: closing && { ...closing, date: dateOnlyStr(closing.date), managerName: name(closing.managerId), cashierName: name(closing.cashierId) },
   };
 }
@@ -93,7 +104,7 @@ export async function outstanding() {
   const today = clinicDateStr(new Date());
   const invoices = await prisma.invoice.findMany({ where: { balancePaisa: { gt: 0n }, status: { not: 'VOID' } }, orderBy: { createdAt: 'asc' } });
   const [patients, installments] = await Promise.all([
-    prisma.patient.findMany({ where: { id: { in: invoices.map((i) => i.patientId) } }, select: { id: true, name: true, phone: true } }),
+    prisma.patient.findMany({ where: { id: { in: invoices.map((i) => i.patientId).filter((x): x is string => !!x) } }, select: { id: true, name: true, phone: true } }),
     prisma.installment.findMany({ where: { versionId: { in: invoices.map((i) => i.planVersionId).filter((x): x is string => !!x) } } }),
   ]);
   const items = invoices.map((inv) => {

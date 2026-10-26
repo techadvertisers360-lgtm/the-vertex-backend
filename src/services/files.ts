@@ -189,7 +189,7 @@ export async function authorizeRead(actor: Actor, att: Attachment, db: Db = pris
       if (r === 'RECEPTIONIST' || r === 'MANAGER' || r === 'MD') return;
       if (r === 'DOCTOR') {
         const inv = await db.invoice.findUnique({ where: { id }, select: { patientId: true } });
-        if (inv && (await doctorCanSeePatient(actor.id, inv.patientId, db))) return;
+        if (inv?.patientId && (await doctorCanSeePatient(actor.id, inv.patientId, db))) return;
       }
       return no('invoice_scope');
     }

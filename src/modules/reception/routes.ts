@@ -6,6 +6,7 @@ import * as svc from './service';
 import * as pharmacy from './pharmacy';
 import * as rstock from './stock';
 import * as services from './services';
+import * as counter from './counterSale';
 
 /** Receptionist endpoints (spec §9). Manager may use the read views too. */
 export const receptionRouter = Router();
@@ -282,5 +283,28 @@ receptionRouter.post(
   route(
     { permission: 'reception:billing', params: z.object({ id: z.string().min(1).max(64), lineId: z.string().min(1).max(64) }), body: z.object({ reason: z.string().trim().min(2).max(500) }) },
     async ({ actor, params, body }) => pharmacy.reverseLine(actor, params.id, params.lineId, body.reason),
+  ),
+);
+
+// ───────────── Counter sale: walk-in pharmacy purchase, no appointment (D-061) ─────────────
+receptionRouter.get('/counter-sales', route({ permission: 'reception:billing', query: z.object({ date: isoDate.optional() }) }, async ({ query }) => counter.list(query.date)));
+receptionRouter.get('/counter-sales/:id', route({ permission: 'reception:billing', params: idParam }, async ({ params }) => counter.detail(params.id)));
+receptionRouter.post(
+  '/counter-sales',
+  route(
+    {
+      permission: 'reception:billing',
+      idempotent: true,
+      status: 201,
+      body: z.object({
+        buyerName: z.string().trim().max(120).optional(),
+        buyerPhone: z.string().trim().max(30).optional(),
+        lines: z.array(z.object({ itemId: z.string().min(1).max(64), quantity: z.number().int().min(1).max(100_000), unitPricePaisa: paisa, discount })).min(1).max(100),
+        payments: z
+          .array(z.object({ method: z.nativeEnum(PaymentMethod), amountPaisa: paisa, bankAccountId: z.string().min(1).max(64).optional(), reference: z.string().trim().max(120).optional() }))
+          .max(10),
+      }),
+    },
+    async ({ actor, body, idempotencyKey }) => counter.createSale(actor, body, idempotencyKey!),
   ),
 );

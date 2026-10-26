@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE `invoices` ADD COLUMN `kind` ENUM('VISIT', 'COUNTER') NOT NULL DEFAULT 'VISIT',
+    ADD COLUMN `buyerName` VARCHAR(191) NULL,
+    ADD COLUMN `buyerPhone` VARCHAR(191) NULL,
+    MODIFY `patientId` VARCHAR(191) NULL,
+    MODIFY `appointmentId` VARCHAR(191) NULL;

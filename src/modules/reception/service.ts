@@ -340,7 +340,13 @@ export async function recordVitals(actor: Actor, appointmentId: string, v: Vital
 
 // ───────────── Billing (spec §9, §5 invoice / payment) ─────────────
 
-async function invoiceNumber(tx: Tx): Promise<string> {
+/** The visit an invoice bills. Counter sales (D-061) have none and are handled in counterSale.ts. */
+function visitOf(inv: { appointmentId: string | null; number: string }): string {
+  if (!inv.appointmentId) throw new ConflictError('COUNTER_SALE', `${inv.number} counter sale hai — visit invoice nahi.`);
+  return inv.appointmentId;
+}
+
+export async function invoiceNumber(tx: Tx): Promise<string> {
   const prefix = await getSetting('invoice.numberPrefix', tx);
   const year = local(new Date()).year;
   return formatNumber(prefix, year, await nextSequence(tx, `invoice:${year}`));
@@ -410,10 +416,11 @@ export async function openInvoice(actor: Actor, appointmentId: string) {
 export async function invoiceDetail(invoiceId: string) {
   const inv = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { lines: true, payments: { orderBy: { receivedAt: 'asc' } } } });
   if (!inv) throw new NotFoundError('Invoice');
+  const appointmentId = visitOf(inv);
   const [appt, prescription, feedback, installments, banks] = await Promise.all([
-    prisma.appointment.findUniqueOrThrow({ where: { id: inv.appointmentId }, select: apptRow }),
+    prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId }, select: apptRow }),
     prisma.attachment.findFirst({ where: { recordType: 'Invoice', recordId: inv.id, route: 'prescriptionPhoto' }, select: { id: true, fileName: true, createdAt: true } }),
-    prisma.feedback.findUnique({ where: { appointmentId: inv.appointmentId }, select: { skipped: true, submittedAt: true, doctorRating: true, staffRating: true, clinicRating: true } }),
+    prisma.feedback.findUnique({ where: { appointmentId }, select: { skipped: true, submittedAt: true, doctorRating: true, staffRating: true, clinicRating: true } }),
     invoiceInstallments(prisma, inv),
     prisma.bankAccount.findMany({ where: { active: true }, select: { id: true, name: true, bankName: true } }),
   ]);
@@ -464,6 +471,7 @@ export async function recordPayment(actor: Actor, invoiceId: string, p: PaymentI
     const inv = await tx.invoice.findUnique({ where: { id: invoiceId } });
     if (!inv) throw new NotFoundError('Invoice');
     if (inv.status !== 'OPEN') throw new ConflictError('INVOICE_CLOSED', 'Invoice close ho chuki hai.');
+    const appointmentId = visitOf(inv);
     const amount = BigInt(p.amountPaisa);
     if (amount > inv.balancePaisa) throw new ValidationError(`Amount balance (${Number(inv.balancePaisa) / 100} Rs) se zyada hai.`);
     if (p.bankAccountId && !(await tx.bankAccount.findFirst({ where: { id: p.bankAccountId, active: true } }))) throw new ValidationError('Bank account nahi mila.');
@@ -493,7 +501,7 @@ export async function recordPayment(actor: Actor, invoiceId: string, p: PaymentI
     });
     const updated = await tx.invoice.update({ where: { id: invoiceId }, data: { paidPaisa: inv.paidPaisa + amount, balancePaisa: inv.balancePaisa - amount } });
     await audit(tx, actor, { action: 'PAYMENT_RECEIVED', recordType: 'Invoice', recordId: invoiceId, before: { paid: inv.paidPaisa, balance: inv.balancePaisa }, after: { paymentId: payment.id, receiptNo: payment.receiptNo, amount, method: p.method, paid: updated.paidPaisa, balance: updated.balancePaisa } });
-    const appt = await tx.appointment.findUniqueOrThrow({ where: { id: inv.appointmentId }, select: { id: true, doctorId: true, status: true } });
+    const appt = await tx.appointment.findUniqueOrThrow({ where: { id: appointmentId }, select: { id: true, doctorId: true, status: true } });
     await journeyChanged(tx, appt);
     return { payment, replayed: false };
   });
@@ -539,7 +547,7 @@ export async function closeInvoice(actor: Actor, invoiceId: string) {
     if (inv.status !== 'OPEN') throw new ConflictError('INVOICE_CLOSED', 'Invoice pehle hi close ho chuki hai.');
     const prescription = await tx.attachment.findFirst({ where: { recordType: 'Invoice', recordId: invoiceId, route: 'prescriptionPhoto' } });
     if (!prescription) throw new LockedError('PRESCRIPTION_REQUIRED', 'Prescription upload required');
-    const appt = await tx.appointment.findUniqueOrThrow({ where: { id: inv.appointmentId }, include: { patient: { select: { id: true, name: true, phone: true, whatsappConsent: true } } } });
+    const appt = await tx.appointment.findUniqueOrThrow({ where: { id: visitOf(inv) }, include: { patient: { select: { id: true, name: true, phone: true, whatsappConsent: true } } } });
     if (appt.status === 'PROCEDURE') throw new LockedError('PROCEDURE_IN_PROGRESS', 'Procedure abhi chal raha hai — patient ke wapas aane ka intezar karein.');
     // Close with a balance only when the installment schedule covers it (clinic decision Q7).
     if (inv.balancePaisa > 0n) {

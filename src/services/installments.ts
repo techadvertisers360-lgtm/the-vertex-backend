@@ -68,6 +68,7 @@ export async function runInstallmentReminders(now = new Date()): Promise<number>
   for (const inv of invoices) {
     const installments = await prisma.installment.findMany({ where: { versionId: inv.planVersionId! } });
     const views = installmentViews(inv, installments, today);
+    if (!inv.patientId) continue;
     const patient = await prisma.patient.findUnique({ where: { id: inv.patientId }, select: { name: true, phone: true, whatsappConsent: true } });
     if (!patient) continue;
     for (const v of views) {

@@ -213,6 +213,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'procedures', label: 'Procedures', path: '/reception/procedures', permission: 'reception:assign_procedure' },
     { key: 'upcoming', label: 'Upcoming Procedures', path: '/reception/upcoming', permission: 'reception:assign_procedure' },
     { key: 'billing', label: 'Billing', path: '/reception/billing', permission: 'reception:billing' },
+    { key: 'counter-sale', label: 'Counter Sale (Pharmacy)', path: '/reception/counter-sale', permission: 'reception:billing' },
     { key: 'stock', label: 'Stock & batches', path: '/reception/stock', permission: 'stock:reception' },
     { key: 'services', label: 'Procedures & Services', path: '/reception/services', permission: 'services:reception' },
     { key: 'done', label: 'Patient Done', path: '/reception/done', permission: 'reception:checkin' },

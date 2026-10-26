@@ -281,6 +281,11 @@ enum LedgerAccount {
   PATIENT_RECEIVABLE
 }
 
+enum InvoiceKind {
+  VISIT
+  COUNTER
+}
+
 enum InvoiceStatus {
   OPEN
   CLOSED
@@ -895,8 +900,14 @@ model Installment {
 model Invoice {
   id                       String        @id @default(cuid())
   number                   String        @unique
-  patientId                String
-  appointmentId            String        @unique
+  /// VISIT = a patient's appointment bill; COUNTER = walk-in pharmacy sale at Reception (D-061), which has no
+  /// appointment and may have no patient.
+  kind                     InvoiceKind   @default(VISIT)
+  patientId                String?
+  appointmentId            String?       @unique
+  /// Counter sale buyer, as told at the desk (optional).
+  buyerName                String?
+  buyerPhone               String?
   planVersionId            String?
   status                   InvoiceStatus @default(OPEN)
   subtotalPaisa            BigInt        @default(0)
