@@ -4,6 +4,7 @@ import {
   buildDoctorDay,
   checkSlot,
   listDaySlots,
+  roomKindsFor,
   suggest,
   type DoctorBusy,
   type EngineData,
@@ -222,6 +223,17 @@ describe('§6 rows 6–8 — rooms (§25: all three compatible rooms busy)', () 
     const r = checkSlot(d, { type: 'CONSULTATION', start: at('15:00'), durationMin: 20, roomId: 'P01' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.conflicts[0]!.code).toBe('ROOM_TYPE_MISMATCH');
+  });
+
+  it('a Consultation + Procedure room hosts either type and is shared between them (D-063)', () => {
+    const shared: RoomInfo = { id: 'X01', code: 'X01', kind: 'CONSULT_PROCEDURE' };
+    expect(roomKindsFor('CONSULTATION')).toEqual(['CONSULT', 'CONSULT_PROCEDURE']);
+    expect(roomKindsFor('PROCEDURE')).toEqual(['PROCEDURE', 'CONSULT_PROCEDURE']);
+    const c = { ...data(), rooms: [shared] };
+    expect(checkSlot(c, { type: 'CONSULTATION', start: at('15:00'), durationMin: 20, roomId: 'X01' }).ok).toBe(true);
+    const p = { ...data({ type: 'PROCEDURE', roomBusy: [roomBusy('X01', '15:00', '15:20')] }), rooms: [shared] };
+    const r = checkSlot(p, { type: 'PROCEDURE', start: at('15:00'), durationMin: 60 });
+    expect(r.ok).toBe(false);
   });
 
   it('a specifically requested busy room is rejected with when it frees up', () => {

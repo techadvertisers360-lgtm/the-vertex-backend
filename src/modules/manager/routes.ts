@@ -66,7 +66,7 @@ managerRouter.post(
 managerRouter.get('/doctors-today', route({ permission: 'availability:approve' }, async () => doctorsToday()));
 managerRouter.get('/doctors/:id/day', route({ permission: 'availability:approve', params: idParam, query: z.object({ date: isoDate.optional() }) }, async ({ params, query }) => schedule.doctorDay(params.id, query.date)));
 // Rooms: add / edit / take out of use (D-051)
-const roomKind = z.enum(['CONSULT', 'PROCEDURE']);
+const roomKind = z.enum(['CONSULT', 'PROCEDURE', 'CONSULT_PROCEDURE']);
 managerRouter.get('/rooms-admin', route({ permission: 'availability:approve' }, async () => roomsAdmin.listRooms()));
 managerRouter.post(
   '/rooms-admin',

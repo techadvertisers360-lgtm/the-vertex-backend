@@ -86,6 +86,7 @@ enum AppointmentSource {
 enum RoomKind {
   CONSULT
   PROCEDURE
+  CONSULT_PROCEDURE // one room used for both consultation and procedure (client 2026-10-27, D-063)
 }
 
 enum ReservationStatus {
@@ -1420,7 +1421,7 @@ model StockItem {
   /// Pharmacy selling price per base unit (D-048); procedure products carry cost on their batches instead.
   salePricePaisa    BigInt?
   preferredVendorId String?
-  /// Procedure catalogue fields from the developer's CSV import (D-055); all optional.
+  /// Procedure catalogue fields from the developer's CSV import (D-063); all optional.
   code              String?   @unique @db.VarChar(64)
   department        String?
   procedureUse      String?   @db.Text

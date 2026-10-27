@@ -58,7 +58,7 @@ export async function updateRoom(actor: Actor, id: string, input: { code?: strin
       const ahead = await tx.roomReservation.count({ where: { roomId: id, status: 'ACTIVE', endAt: { gt: new Date() } } });
       if (ahead) throw new ConflictError('ROOM_HAS_BOOKINGS', `Room ${before.code} mein aage ${ahead} booking(s) hain — pehle unhein doosre room / waqt par le jayein.`);
       // a Doctor's assigned room must stay a usable consultation room
-      await tx.doctorProfile.updateMany({ where: { defaultRoomId: id }, data: { defaultRoomId: null } });
+      if (leaving || input.kind === 'PROCEDURE') await tx.doctorProfile.updateMany({ where: { defaultRoomId: id }, data: { defaultRoomId: null } });
     }
     const after = await tx.room.update({
       where: { id },

@@ -114,6 +114,11 @@ export function roomKindFor(type: AppointmentType): RoomKind {
   return type === 'PROCEDURE' ? 'PROCEDURE' : 'CONSULT';
 }
 
+/** Room kinds that can host this appointment type: its own kind, plus Consultation + Procedure rooms (D-063). */
+export function roomKindsFor(type: AppointmentType): RoomKind[] {
+  return [roomKindFor(type), 'CONSULT_PROCEDURE'];
+}
+
 /** Authoritative check of one slot. Used both for UI options and at final save. */
 export function checkSlot(data: EngineData, req: SlotRequest): CheckResult {
   const { config: c } = data;

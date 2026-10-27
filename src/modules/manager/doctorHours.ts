@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import { addDaysStr, clinicDateStr, clinicMinuteOfDay, dateOnly, dateOnlyStr, local } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
+import { roomKindsFor } from '../../services/scheduling/engine';
 
 /**
  * Doctor weekly hours and consultation room (client 2026-10-20, D-049). The booking engine builds every day from these
@@ -17,6 +18,7 @@ const minutes = (s: string) => {
   return Number(m[1]) * 60 + Number(m[2]);
 };
 const ACTIVE: AppointmentStatus[] = ['DRAFT', 'CONFIRMED'];
+const CONSULT_ROOM_KINDS = roomKindsFor('CONSULTATION');
 
 export async function list() {
   const today = clinicDateStr(new Date());
@@ -26,7 +28,7 @@ export async function list() {
       select: { id: true, displayName: true, doctorProfile: { select: { specialty: true, defaultRoomId: true } } },
       orderBy: { displayName: 'asc' },
     }),
-    prisma.room.findMany({ where: { kind: 'CONSULT', active: true }, select: { id: true, code: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
+    prisma.room.findMany({ where: { kind: { in: CONSULT_ROOM_KINDS }, active: true }, select: { id: true, code: true, name: true, kind: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
   ]);
   const rows = await prisma.doctorSchedule.findMany({
     where: { doctorId: { in: doctors.map((d) => d.id) }, active: true, OR: [{ effectiveTo: null }, { effectiveTo: { gte: dateOnly(today) } }] },
@@ -124,7 +126,7 @@ export async function setRoom(actor: Actor, doctorId: string, roomId: string | n
     if (!doc || doc.role !== 'DOCTOR') throw new NotFoundError('Doctor');
     if (roomId) {
       const room = await tx.room.findUnique({ where: { id: roomId } });
-      if (!room || !room.active || room.kind !== 'CONSULT') throw new ValidationError('Consultation room chunein.');
+      if (!room || !room.active || !CONSULT_ROOM_KINDS.includes(room.kind)) throw new ValidationError('Consultation room chunein.');
     }
     const before = await tx.doctorProfile.findUnique({ where: { userId: doctorId }, select: { defaultRoomId: true } });
     await tx.doctorProfile.upsert({ where: { userId: doctorId }, create: { userId: doctorId, defaultRoomId: roomId }, update: { defaultRoomId: roomId } });

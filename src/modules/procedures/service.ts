@@ -8,6 +8,7 @@ import { notifyRoles, notifyUsers } from '../../services/notifications';
 import { publish, userRoom } from '../../services/realtime';
 import { getSetting } from '../../services/settings';
 import { lockForScheduling, resolveDuration, TX_OPTS } from '../../services/scheduling';
+import { roomKindsFor } from '../../services/scheduling/engine';
 import { assertAssignedProcedure, deny } from '../../services/scope';
 import { deductUsage, type UsageLine } from '../../services/stock';
 import { journeyChanged } from '../../services/tracker';
@@ -187,8 +188,10 @@ async function durationFor(itemId: string) {
   return resolveDuration(prisma, 'PROCEDURE', it.serviceId);
 }
 
+const PROCEDURE_ROOM_KINDS = roomKindsFor('PROCEDURE');
+
 async function busyRoomIds(db: Tx | typeof prisma, from: Date, to: Date) {
-  const res = await db.roomReservation.findMany({ where: { status: { in: ['ACTIVE', 'AWAITING_CLEAN'] }, room: { kind: 'PROCEDURE' }, OR: [{ status: 'AWAITING_CLEAN' }, { startAt: { lt: to }, endAt: { gt: from } }] }, select: { roomId: true, startAt: true, endAt: true, status: true, appointmentId: true } });
+  const res = await db.roomReservation.findMany({ where: { status: { in: ['ACTIVE', 'AWAITING_CLEAN'] }, room: { kind: { in: PROCEDURE_ROOM_KINDS } }, OR: [{ status: 'AWAITING_CLEAN' }, { startAt: { lt: to }, endAt: { gt: from } }] }, select: { roomId: true, startAt: true, endAt: true, status: true, appointmentId: true } });
   return res.filter((r) => r.status === 'AWAITING_CLEAN' || overlaps(r.startAt, r.endAt, from, to));
 }
 
@@ -200,7 +203,7 @@ export async function assignOptions(planItemId: string) {
   const today = clinicDate(now);
   const [assistants, rooms, busy, ownBooking] = await Promise.all([
     prisma.user.findMany({ where: { role: 'ASSISTANT', active: true }, select: { id: true, displayName: true, attendanceRequired: true } }),
-    prisma.room.findMany({ where: { kind: 'PROCEDURE', active: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, code: true, name: true } }),
+    prisma.room.findMany({ where: { kind: { in: PROCEDURE_ROOM_KINDS }, active: true }, orderBy: [{ kind: 'asc' }, { sortOrder: 'asc' }], select: { id: true, code: true, name: true } }),
     busyRoomIds(prisma, now, until),
     prisma.appointment.findUnique({ where: { treatmentPlanItemId: planItemId }, select: { id: true, roomId: true } }),
   ]);
@@ -264,7 +267,7 @@ export async function assign(actor: Actor, input: { planItemId: string; assistan
     if (await tx.procedureTask.findFirst({ where: { assistantId: assistant.id, status: { in: [...ACTIVE_TASK] } } })) throw new ConflictError('ASSISTANT_BUSY', `${assistant.displayName} abhi doosre procedure par hain.`);
 
     const room = await tx.room.findUnique({ where: { id: input.roomId } });
-    if (!room || room.kind !== 'PROCEDURE' || !room.active) throw new ValidationError('Procedure room (P01–P03) chunein.');
+    if (!room || !PROCEDURE_ROOM_KINDS.includes(room.kind) || !room.active) throw new ValidationError('Procedure room chunein.');
     const until = addMinutes(now, durationMin);
     const blockers = (await busyRoomIds(tx, now, until)).filter((r) => r.roomId === room.id && r.appointmentId !== appointment!.id);
     if (blockers.length) throw new ConflictError('ROOM_BUSY', `Room ${room.code} abhi free nahi. Doosra room chunein.`);

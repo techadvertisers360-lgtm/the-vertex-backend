@@ -9,7 +9,7 @@ import {
   buildDoctorDay,
   checkSlot,
   listDaySlots,
-  roomKindFor,
+  roomKindsFor,
   suggest,
   type CheckResult,
   type Conflict,
@@ -82,17 +82,21 @@ export async function loadEngineData(db: Tx | typeof prisma, o: LoadOptions): Pr
       },
       select: { id: true, startAt: true, endAt: true, type: true, status: true, treatmentPlanItemId: true, sentToReceptionAt: true, doneAt: true },
     }),
-    db.room.findMany({ where: { kind: roomKindFor(o.type) as RoomKind, active: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
+    db.room.findMany({ where: { kind: { in: roomKindsFor(o.type) }, active: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
   ]);
 
   // Consultation rooms the Manager assigned to Doctors (D-049): this Doctor's own room first, rooms assigned to other
   // Doctors last — the engine takes the first free room in this order, so a free assigned room is always used.
-  if (rooms[0]?.kind === 'CONSULT') {
+  // Consultation + Procedure rooms (D-063) come after the dedicated rooms, so they stay free for the other type.
+  const shared = (k: RoomKind) => (k === 'CONSULT_PROCEDURE' ? 1 : 0);
+  if (o.type === 'CONSULTATION') {
     const owners = await db.doctorProfile.findMany({ where: { defaultRoomId: { not: null } }, select: { userId: true, defaultRoomId: true } });
     const mine = owners.find((x) => x.userId === o.doctorId)?.defaultRoomId ?? null;
     const others = new Set(owners.filter((x) => x.userId !== o.doctorId).map((x) => x.defaultRoomId));
-    const rank = (id: string) => (id === mine ? 0 : others.has(id) ? 2 : 1);
-    rooms.sort((a, b) => rank(a.id) - rank(b.id)); // stable: keeps sortOrder within each group
+    const rank = (r: { id: string; kind: RoomKind }) => (r.id === mine ? 0 : others.has(r.id) ? 3 : 1 + shared(r.kind));
+    rooms.sort((a, b) => rank(a) - rank(b)); // stable: keeps sortOrder within each group
+  } else {
+    rooms.sort((a, b) => shared(a.kind) - shared(b.kind));
   }
   const reservations = await db.roomReservation.findMany({
     where: {
@@ -164,7 +168,8 @@ export async function lockForScheduling(tx: Tx, doctorIds: string[], kinds: Room
     const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM doctor_profiles WHERE userId = ${doctorId} FOR UPDATE`;
     if (!rows.length) throw new ValidationError('Doctor nahi mila.');
   }
-  for (const kind of [...new Set(kinds)].sort()) {
+  // Consultation + Procedure rooms serve both types, so every booking also locks them (same sorted order → no deadlock).
+  for (const kind of [...new Set<RoomKind>([...kinds, 'CONSULT_PROCEDURE'])].sort()) {
     await tx.$queryRaw`SELECT id FROM rooms WHERE kind = ${kind} ORDER BY id FOR UPDATE`;
   }
 }
@@ -287,7 +292,7 @@ export async function bookInTx(tx: Tx, actor: Actor, input: BookInput): Promise<
   const patient = await tx.patient.findUnique({ where: { id: input.patientId }, select: { id: true } });
   if (!patient) throw new NotFoundError('Patient');
 
-  await lockForScheduling(tx, [input.doctorId], [roomKindFor(input.type)]);
+  await lockForScheduling(tx, [input.doctorId], roomKindsFor(input.type));
   const durationMin = input.durationMin ?? (await resolveDuration(tx, input.type, input.serviceId));
   const data = await loadEngineData(tx, { doctorId: input.doctorId, type: input.type, fromDate: clinicDateStr(input.start) });
   const req: SlotRequest = { type: input.type, start: input.start, durationMin, roomId: input.roomId };
@@ -346,7 +351,7 @@ export async function rescheduleInTx(tx: Tx, actor: Actor, appointmentId: string
   if (old.status !== 'CONFIRMED' && old.status !== 'DRAFT') {
     throw new ConflictError('NOT_RESCHEDULABLE', 'Sirf confirmed (check-in se pehle) appointment reschedule ho sakti hai.');
   }
-  await lockForScheduling(tx, [old.doctorId], [roomKindFor(old.type)]);
+  await lockForScheduling(tx, [old.doctorId], roomKindsFor(old.type));
   const fresh = await tx.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
   if (fresh.status !== old.status) throw new ConflictError('STATUS_CHANGED', 'Is appointment ka status abhi badal gaya. Refresh karein.');
 
