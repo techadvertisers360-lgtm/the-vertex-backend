@@ -171,3 +171,69 @@ describe('D-053 — the MD opens today’s patients and Doctor leave (read-only)
     expect((await call((await agentFor('LEAD_MEMBER')).agent).get('/api/md/doctor-leaves')).status).toBe(403);
   });
 });
+
+describe('D-064 — the Manager adds, edits and removes Doctors', () => {
+  it('adds a Doctor who can then be booked; edits the profile; cannot remove with bookings ahead; never deletes', async () => {
+    const code = `DR${String(Date.now()).slice(-6)}`;
+    const add = await mgr.post('/api/manager/doctors-admin', { displayName: 'Dr Demo Added', specialty: 'Dermatology', memberCode: code, password: 'Doctor123' });
+    expect(add.status).toBe(201);
+    const id = add.body.id as string;
+    expect(await prisma.user.findUniqueOrThrow({ where: { id }, select: { role: true, active: true } })).toEqual({ role: 'DOCTOR', active: true });
+    expect((await mgr.post('/api/manager/doctors-admin', { displayName: 'Dr Copy', memberCode: code, password: 'Doctor123' })).status).toBe(409);
+    expect((await mgr.post('/api/manager/doctors-admin', { displayName: 'Dr No Login', password: 'Doctor123' })).status).toBe(422);
+
+    const edit = await mgr.patch(`/api/manager/doctors-admin/${id}`, { displayName: 'Dr Demo Edited', specialty: 'Aesthetics' });
+    expect(edit.status).toBe(200);
+    const row = (await mgr.get('/api/manager/doctors-admin')).body.items.find((d: { id: string }) => d.id === id);
+    expect(row).toMatchObject({ displayName: 'Dr Demo Edited', specialty: 'Aesthetics', active: true, bookingsAhead: 0 });
+
+    await mgr.put(`/api/manager/doctor-hours/${id}`, { effectiveFrom: clinicDateStr(new Date()), days: ALL_WEEK('09:00', '21:00') });
+    const b = await book(id, at(13, 10));
+    expect(b.status).toBe(201);
+    const blocked = await mgr.put(`/api/manager/doctors-admin/${id}/active`, { active: false });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.code).toBe('DOCTOR_HAS_BOOKINGS');
+
+    await prisma.appointment.update({ where: { id: b.body.appointment.id }, data: { status: 'CANCELLED' } });
+    expect((await mgr.put(`/api/manager/doctors-admin/${id}/active`, { active: false })).body.active).toBe(false);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id }, select: { active: true } })).toEqual({ active: false });
+    expect((await book(id, at(14, 10))).status).not.toBe(201);
+    expect((await mgr.put(`/api/manager/doctors-admin/${id}/active`, { active: true })).body.active).toBe(true);
+    expect(await prisma.auditEvent.count({ where: { recordId: id, action: { in: ['USER_CREATED', 'USER_UPDATED', 'USER_ACCESS_CHANGED'] } } })).toBe(4);
+
+    for (const role of ['RECEPTIONIST', 'DOCTOR', 'MD'] as const) expect((await call((await agentFor(role)).agent).post('/api/manager/doctors-admin', { displayName: 'Dr X', memberCode: 'DRX99', password: 'Doctor123' })).status).toBe(403);
+  });
+});
+
+describe('D-065 — the Manager edits and deletes rooms', () => {
+  it('edits code / name / type; an unused room is removed; a used room is archived; bookings ahead block delete', async () => {
+    const stamp = String(Date.now()).slice(-5);
+    const add = await mgr.post('/api/manager/rooms-admin', { code: `E${stamp}`, kind: 'CONSULT' });
+    const id = add.body.id as string;
+    const edit = await mgr.patch(`/api/manager/rooms-admin/${id}`, { code: `F${stamp}`, name: 'Laser room', kind: 'CONSULT_PROCEDURE' });
+    expect(edit.body).toMatchObject({ code: `F${stamp}`, name: 'Laser room', kind: 'CONSULT_PROCEDURE' });
+
+    // never used → removed outright
+    expect((await mgr.delete(`/api/manager/rooms-admin/${id}`)).body).toEqual({ id, archived: false });
+    expect(await prisma.room.findUnique({ where: { id } })).toBeNull();
+    expect((await mgr.delete(`/api/manager/rooms-admin/${id}`)).status).toBe(404);
+
+    // used by a booking → blocked while ahead, archived once it is gone; code stays reserved for history
+    const used = await mgr.post('/api/manager/rooms-admin', { code: `G${stamp}`, kind: 'CONSULT' });
+    const doc = await makeUser('DOCTOR');
+    await mgr.put(`/api/manager/doctor-hours/${doc.id}`, { effectiveFrom: clinicDateStr(new Date()), days: ALL_WEEK('09:00', '21:00') });
+    await mgr.put(`/api/manager/doctor-hours/${doc.id}/room`, { roomId: used.body.id });
+    const b = await book(doc.id, at(15, 10));
+    expect(b.body.appointment.roomId).toBe(used.body.id);
+    expect((await mgr.delete(`/api/manager/rooms-admin/${used.body.id}`)).body.error.code).toBe('ROOM_HAS_BOOKINGS');
+    await prisma.roomReservation.updateMany({ where: { roomId: used.body.id }, data: { status: 'CANCELLED' } });
+    expect((await mgr.delete(`/api/manager/rooms-admin/${used.body.id}`)).body).toEqual({ id: used.body.id, archived: true });
+    expect(await prisma.room.findUniqueOrThrow({ where: { id: used.body.id }, select: { active: true, code: true } })).toEqual({ active: false, code: `G${stamp}` });
+    expect((await prisma.doctorProfile.findUniqueOrThrow({ where: { userId: doc.id } })).defaultRoomId).toBeNull();
+    expect((await mgr.get('/api/manager/rooms-admin')).body.items.some((r: { id: string }) => r.id === used.body.id)).toBe(false);
+    expect((await mgr.patch(`/api/manager/rooms-admin/${used.body.id}`, { name: 'x' })).status).toBe(404);
+    expect((await mgr.post('/api/manager/rooms-admin', { code: `G${stamp}`, kind: 'CONSULT' })).status).toBe(409);
+    expect(await prisma.auditEvent.count({ where: { action: 'ROOM_DELETED', recordId: { in: [id, used.body.id] } } })).toBe(2);
+    expect((await call((await agentFor('RECEPTIONIST')).agent).delete(`/api/manager/rooms-admin/${add.body.id}`)).status).toBe(403);
+  });
+});

@@ -60,12 +60,12 @@ export async function listAssignments(db: Tx | typeof prisma = prisma, date?: st
   const d = dayOf(date);
   const rows = await db.roomAssignment.findMany({ where: { date: d, unassignedAt: null }, include: { reports: { select: { id: true, kind: true, submittedAt: true } } }, orderBy: { createdAt: 'asc' } });
   const [rooms, users] = await Promise.all([
-    db.room.findMany({ select: { id: true, code: true, name: true, kind: true } }),
+    db.room.findMany({ select: { id: true, code: true, name: true, kind: true, deletedAt: true } }),
     db.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.assistantId))] } }, select: { id: true, displayName: true } }),
   ]);
   return {
     date: clinicDateStr(d),
-    rooms: rooms.map((r) => ({ id: r.id, code: r.code, name: r.name, kind: r.kind })).sort((x, y) => x.code.localeCompare(y.code)),
+    rooms: rooms.filter((r) => !r.deletedAt).map((r) => ({ id: r.id, code: r.code, name: r.name, kind: r.kind })).sort((x, y) => x.code.localeCompare(y.code)),
     maxPerAssistant: await getSetting('rooms.maxPerAssistant', db),
     items: rows.map((r) => ({ id: r.id, room: rooms.find((x) => x.id === r.roomId) ?? null, assistantId: r.assistantId, assistantName: users.find((u) => u.id === r.assistantId)?.displayName ?? null, acceptedAt: r.acceptedAt, reports: r.reports })),
   };

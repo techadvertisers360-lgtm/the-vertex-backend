@@ -351,30 +351,30 @@ enum UploadRoute {
 // ───────────────────────────── Identity & auth ─────────────────────────────
 
 model User {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   displayName        String
-  email              String?  @unique
-  phone              String?  @unique // normalizePhone()
-  memberCode         String?  @unique // Member ID login (Lead members / staff IDs)
+  email              String?   @unique
+  phone              String?   @unique // normalizePhone()
+  memberCode         String?   @unique // Member ID login (Lead members / staff IDs)
   passwordHash       String
   role               Role
-  active             Boolean  @default(true)
+  active             Boolean   @default(true)
   /// Developer switch (D-049): false = this person does not check in / out; the app treats them as on duty.
-  attendanceRequired Boolean  @default(true)
-  tokenVersion       Int      @default(0) // bump to invalidate all access tokens
+  attendanceRequired Boolean   @default(true)
+  tokenVersion       Int       @default(0) // bump to invalidate all access tokens
   title              String? // e.g. "Marketing & Development Director / Co-Founder"
-  isDemo             Boolean  @default(false)
+  isDemo             Boolean   @default(false)
   /// Set when an admin gives a temporary password; the user must choose a new one on next sign-in (D-043).
-  mustChangePassword Boolean  @default(false)
+  mustChangePassword Boolean   @default(false)
   /// Developer switch (D-062): true = this person can use the app only at the clinic (when the geofence is on).
-  geofenceRequired   Boolean  @default(false)
+  geofenceRequired   Boolean   @default(false)
   /// Last location check only — no history (D-062): when, inside or not, distance in metres. Never coordinates.
   geoLastCheckAt     DateTime?
   geoLastInside      Boolean?
   geoLastDistanceM   Int?
   createdById        String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   createdBy         User?                @relation("UserCreatedBy", fields: [createdById], references: [id])
   createdUsers      User[]               @relation("UserCreatedBy")
@@ -643,14 +643,17 @@ model Patient {
 }
 
 model Room {
-  id        String   @id @default(cuid())
-  code      String   @unique // C01..C03, P01..P03
-  name      String
-  kind      RoomKind
-  active    Boolean  @default(true)
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String    @id @default(cuid())
+  code        String    @unique // C01..C03, P01..P03
+  name        String
+  kind        RoomKind
+  active      Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  /// Manager deleted a room that history still points to (D-065): hidden everywhere, kept for old records.
+  deletedAt   DateTime?
+  deletedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   reservations RoomReservation[]
 

@@ -9,6 +9,7 @@ import * as followups from './followups';
 import * as reports from './reports';
 import * as schedule from './schedule';
 import * as doctorHours from './doctorHours';
+import * as doctorsAdmin from './doctorsAdmin';
 import * as roomsAdmin from './roomsAdmin';
 import * as staff from './staff';
 import * as stockChecks from './stockChecks';
@@ -78,6 +79,29 @@ managerRouter.patch(
     { permission: 'availability:approve', params: idParam, body: z.object({ code: z.string().trim().min(1).max(20).optional(), name: z.string().max(60).optional(), kind: roomKind.optional(), active: z.boolean().optional(), sortOrder: z.number().int().min(0).max(999).optional() }) },
     async ({ actor, params, body }) => roomsAdmin.updateRoom(actor, params.id, body),
   ),
+);
+managerRouter.delete('/rooms-admin/:id', route({ permission: 'availability:approve', params: idParam }, async ({ actor, params }) => roomsAdmin.deleteRoom(actor, params.id)));
+// Doctors: add / edit profile / switch off or back on (D-064)
+const doctorFields = {
+  displayName: z.string().trim().min(2).max(100),
+  specialty: z.string().max(120).nullable().optional(),
+  title: z.string().max(120).nullable().optional(),
+  email: z.union([z.string().trim().email().max(120), z.literal('')]).nullable().optional(),
+  phone: z.string().max(20).nullable().optional(),
+  memberCode: z.union([z.string().trim().regex(/^[A-Za-z0-9-]{3,20}$/), z.literal('')]).nullable().optional(),
+};
+managerRouter.get('/doctors-admin', route({ permission: 'users:manage' }, async ({ actor }) => doctorsAdmin.listDoctors(actor)));
+managerRouter.post(
+  '/doctors-admin',
+  route({ permission: 'users:manage', status: 201, body: z.object({ ...doctorFields, password: z.string().min(8).max(200) }) }, async ({ actor, body }) => doctorsAdmin.createDoctor(actor, body)),
+);
+managerRouter.patch(
+  '/doctors-admin/:id',
+  route({ permission: 'users:manage', params: idParam, body: z.object(doctorFields).partial() }, async ({ actor, params, body }) => doctorsAdmin.updateDoctor(actor, params.id, body)),
+);
+managerRouter.put(
+  '/doctors-admin/:id/active',
+  route({ permission: 'users:manage', params: idParam, body: z.object({ active: z.boolean() }) }, async ({ actor, params, body }) => doctorsAdmin.setDoctorActive(actor, params.id, body.active)),
 );
 // Doctor weekly hours + consultation room (D-049)
 managerRouter.get('/doctor-hours', route({ permission: 'availability:approve' }, async () => doctorHours.list()));

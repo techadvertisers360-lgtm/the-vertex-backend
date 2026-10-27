@@ -67,6 +67,7 @@ export function call(agent: Agent) {
     },
     put: (url: string, body?: object) => agent.put(url).set('x-vh-client', 'web').send(body ?? {}),
     patch: (url: string, body?: object) => agent.patch(url).set('x-vh-client', 'web').send(body ?? {}),
+    delete: (url: string) => agent.delete(url).set('x-vh-client', 'web'),
   };
 }
 
