@@ -41,7 +41,7 @@ export async function listDemands(filter: { scope: 'review' | 'md' | 'purchase' 
 }
 
 async function decorate(rows: Prisma.StockDemandGetPayload<{ include: { lines: true } }>[]) {
-  const itemIds = [...new Set(rows.flatMap((r) => r.lines.map((l) => l.itemId)))];
+  const itemIds = [...new Set(rows.flatMap((r) => r.lines.flatMap((l) => (l.itemId ? [l.itemId] : []))))];
   const [items, users, receipts] = await Promise.all([
     prisma.stockItem.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true, baseUnit: true, minQty: true } }),
     prisma.user.findMany({ where: { id: { in: [...new Set(rows.flatMap((r) => [r.requestedById, r.approvedById, r.forwardedById].filter((x): x is string => !!x)))] } }, select: { id: true, displayName: true } }),
@@ -68,7 +68,8 @@ async function decorate(rows: Prisma.StockDemandGetPayload<{ include: { lines: t
     closedAt: r.closedAt,
     lines: r.lines.map((l) => {
       const it = items.find((i) => i.id === l.itemId);
-      return { id: l.id, itemId: l.itemId, name: it?.name ?? '—', unit: it?.baseUnit ?? '', quantity: l.quantity, receivedQty: l.receivedQty, remainingQty: Math.max(0, l.quantity - l.receivedQty), estUnitCostPaisa: l.estUnitCostPaisa, lineTotalPaisa: BigInt(l.quantity) * l.estUnitCostPaisa, onHand: stock.get(l.itemId) ?? 0, minQty: it?.minQty ?? 0 };
+      // freeText: an Office Boy's written item (D-066) — priced and approved like any line, never received into stock
+      return { id: l.id, itemId: l.itemId, freeText: !l.itemId, name: l.itemName ?? it?.name ?? '—', unit: it?.baseUnit ?? '', quantity: l.quantity, receivedQty: l.receivedQty, remainingQty: Math.max(0, l.quantity - l.receivedQty), estUnitCostPaisa: l.estUnitCostPaisa, lineTotalPaisa: BigInt(l.quantity) * l.estUnitCostPaisa, onHand: l.itemId ? (stock.get(l.itemId) ?? 0) : null, minQty: it?.minQty ?? 0 };
     }),
     receipts: receipts.filter((x) => x.demandId === r.id).map((x) => ({ ...x, vendorName: vendors.find((v) => v.id === x.vendorId)?.name ?? null })),
     receivedTotalPaisa: receipts.filter((x) => x.demandId === r.id).reduce((s, x) => s + x.totalPaisa, 0n),
@@ -140,8 +141,8 @@ export async function managerDecision(actor: Actor, id: string, action: 'APPROVE
     // FORWARD to MD
     await tx.stockDemand.update({ where: { id }, data: { status: 'PENDING_MD', forwardedToMdAt: now, forwardedById: actor.id, decisionReason: reason?.trim() || null } });
     await audit(tx, actor, { action: 'DEMAND_FORWARDED_TO_MD', recordType: 'StockDemand', recordId: id, after: { totalPaisa: total }, reason });
-    const items = await tx.stockItem.findMany({ where: { id: { in: d.lines.map((l) => l.itemId) } }, select: { id: true, name: true, baseUnit: true } });
-    const lines = d.lines.map((l) => { const it = items.find((i) => i.id === l.itemId); return `${it?.name ?? 'item'} × ${l.quantity} ${it?.baseUnit ?? ''}`.trim(); }).join(', ');
+    const items = await tx.stockItem.findMany({ where: { id: { in: d.lines.flatMap((l) => (l.itemId ? [l.itemId] : [])) } }, select: { id: true, name: true, baseUnit: true } });
+    const lines = d.lines.map((l) => { const it = items.find((i) => i.id === l.itemId); return `${l.itemName ?? it?.name ?? 'item'} × ${l.quantity} ${it?.baseUnit ?? ''}`.trim(); }).join(', ');
     const mdBody = `${lines} · estimate Rs ${Number(total) / 100} · ${d.reason}${reason?.trim() ? ` · Manager note: ${reason.trim()}` : ''} · Manager: ${actor.displayName}`;
     await notifyRoles(tx, ['MD'], { type: 'STOCK_DEMAND_MD', subject: `Stock demand approval: Rs ${Number(total) / 100}`, body: mdBody, recordType: 'StockDemand', recordId: id, sender: actor, priority: 1, actionLabel: 'Approve / reject', dedupeKey: `demand:${id}:md:${now.getTime()}` });
     return { id, status: 'PENDING_MD' as const };

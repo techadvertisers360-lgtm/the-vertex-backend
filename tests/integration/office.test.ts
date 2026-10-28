@@ -154,16 +154,32 @@ describe('§12–13 — stock demands from Office Boy / Assistant; no costs', ()
     expect(list.body.items.find((i: { id: string }) => i.id === item.id).usableQty).toBe(3);
 
     expect((await api.post('/api/stock/demands', { lines: [], reason: 'x' }, newKey())).status).toBe(422);
-    const res = await api.post('/api/stock/demands', { lines: [{ itemId: item.id, quantity: 10 }], reason: 'Round mein refill kam mila' }, newKey());
+    // D-066: the Office Boy writes items by name — a picked stock item is refused
+    expect((await api.post('/api/stock/demands', { lines: [{ itemId: item.id, quantity: 10 }], reason: 'Round mein refill kam mila' }, newKey())).status).toBe(422);
+    expect((await api.post('/api/stock/demands', { lines: [{ itemName: 'Surf' }, { itemName: ' surf ' }], reason: 'Dobara' }, newKey())).status).toBe(422);
+    const res = await api.post('/api/stock/demands', { lines: [{ itemName: 'Surf 2 packet' }, { itemName: 'Tissue roll' }], reason: 'Round mein refill kam mila' }, newKey());
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('PENDING_MANAGER');
     const d = await prisma.stockDemand.findUniqueOrThrow({ where: { id: res.body.id }, include: { lines: true } });
     expect(d).toMatchObject({ requestedById: user.id, requesterRole: 'OFFICE_BOY', demandNumber: null });
-    expect(d.lines).toHaveLength(1);
+    expect(d.lines.map((l) => [l.itemId, l.itemName, l.quantity])).toEqual([[null, 'Surf 2 packet', 1], [null, 'Tissue roll', 1]]);
+    const n = await prisma.notification.findFirstOrThrow({ where: { recordId: d.id, type: 'STOCK_DEMAND', recipientId: managerId } });
+    expect(n.body).toContain('Surf 2 packet, Tissue roll — Round mein refill kam mila');
     expect(await prisma.notification.count({ where: { recordId: d.id, type: 'STOCK_DEMAND', recipientId: managerId } })).toBe(1);
 
     const mine = await api.get('/api/stock/demands/mine');
     expect(mine.body.items[0]).toMatchObject({ id: d.id, status: 'PENDING_MANAGER' });
+    expect(mine.body.items[0].lines.map((l: { name: string }) => l.name)).toEqual(['Surf 2 packet', 'Tissue roll']);
+
+    // Manager prices and approves it like any demand; written items are never received into stock
+    const mgr = call((await agentFor('MANAGER')).agent);
+    const view = (await mgr.get(`/api/inventory/demands/${d.id}`)).body;
+    expect(view.lines[0]).toMatchObject({ name: 'Surf 2 packet', freeText: true, itemId: null, onHand: null });
+    await mgr.put(`/api/inventory/demands/${d.id}/estimates`, { lines: view.lines.map((l: { id: string }) => ({ lineId: l.id, estUnitCostPaisa: 50_000 })) });
+    expect((await mgr.post(`/api/inventory/demands/${d.id}/decision`, { action: 'APPROVE' })).body.status).toBe('APPROVED');
+    const v = await prisma.vendor.create({ data: { name: `Office vendor ${Date.now()}` } });
+    const rcv = await mgr.post('/api/inventory/receipts', { demandId: d.id, vendorId: v.id, lines: [{ demandLineId: view.lines[0].id, quantity: 1, unitCostPaisa: 50_000, lotNo: 'X' }] }, newKey());
+    expect(rcv.status).toBe(422);
     expect(JSON.stringify(mine.body)).not.toMatch(/"[^"]*(cost|paisa|total)[^"]*":/i);
 
     const asst = await agentFor('ASSISTANT');

@@ -435,9 +435,9 @@ describe('§20 matrix — leave and MD demand notices carry the facts', () => {
     expect(n.body).toContain('Coverage: Senior receptionist covers');
     expect(n.body).toMatch(/10:00 am/i);
 
-    const ob = call((await agentFor('OFFICE_BOY')).agent);
+    const asst = call((await agentFor('ASSISTANT')).agent);
     const item = await prisma.stockItem.create({ data: { name: `Matrix gel ${uid()}`, category: 'consumable', baseUnit: 'tube', minQty: 1 } });
-    const c = await ob.post('/api/stock/demands', { lines: [{ itemId: item.id, quantity: 30 }], reason: 'Laser week' }, newKey());
+    const c = await asst.post('/api/stock/demands', { lines: [{ itemId: item.id, quantity: 30 }], reason: 'Laser week' }, newKey());
     const d = await mgr.get(`/api/inventory/demands/${c.body.id}`);
     await mgr.put(`/api/inventory/demands/${c.body.id}/estimates`, { lines: [{ lineId: d.body.lines[0].id, estUnitCostPaisa: 100_000 }] });
     expect((await mgr.post(`/api/inventory/demands/${c.body.id}/decision`, { action: 'FORWARD', reason: 'Bulk' })).body.status).toBe('PENDING_MD');

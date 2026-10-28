@@ -40,7 +40,11 @@ stockRouter.post(
       permission: 'stock:demand_create',
       idempotent: true,
       status: 201,
-      body: z.object({ lines: z.array(z.object({ itemId: z.string().min(1).max(64), quantity: z.number().int().min(1).max(100_000) })).min(1).max(30), reason: z.string().trim().min(3).max(2000) }),
+      // Assistant: { itemId, quantity }; Office Boy: { itemName } only (D-066) — the service enforces which per role
+      body: z.object({
+        lines: z.array(z.object({ itemId: z.string().min(1).max(64).optional(), itemName: z.string().trim().min(2).max(120).optional(), quantity: z.number().int().min(1).max(100_000).optional() })).min(1).max(30),
+        reason: z.string().trim().min(3).max(2000),
+      }),
     },
     async ({ actor, body }) => demands.createDemand(actor, body),
   ),

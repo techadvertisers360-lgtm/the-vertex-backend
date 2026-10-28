@@ -40,6 +40,7 @@ export async function receiveGoods(actor: Actor, input: { demandId: string; vend
     for (const l of input.lines) {
       const line = d.lines.find((x) => x.id === l.demandLineId);
       if (!line) throw new ValidationError('Line is demand ki nahi.');
+      if (!line.itemId) throw new ValidationError(`"${line.itemName}" stock item nahi (likhi hui cheez) — stock mein receive nahi hoti. Kharidne ke baad demand band karein.`);
       if (!Number.isInteger(l.quantity) || l.quantity <= 0) throw new ValidationError('Quantity sahi likhein.');
       if (l.quantity > line.quantity - line.receivedQty) throw new ValidationError(`Demand se zyada nahi: is item ki ${line.quantity - line.receivedQty} baqi hai.`);
       if (l.unitCostPaisa <= 0) throw new ValidationError('Unit cost likhein.');
@@ -56,17 +57,18 @@ export async function receiveGoods(actor: Actor, input: { demandId: string; vend
     const receipt = await tx.goodsReceipt.create({ data: { demandId: d.id, vendorId: vendor.id, vendorInvoiceNo: input.vendorInvoiceNo?.trim() || null, totalPaisa: total, receivedById: actor.id!, idempotencyKey } });
     for (const l of input.lines) {
       const line = d.lines.find((x) => x.id === l.demandLineId)!;
+      const itemId = line.itemId!; // checked above
       const lot = l.lotNo.trim();
-      let batch = await tx.stockBatch.findUnique({ where: { itemId_lotNo: { itemId: line.itemId, lotNo: lot } } });
+      let batch = await tx.stockBatch.findUnique({ where: { itemId_lotNo: { itemId, lotNo: lot } } });
       if (batch && (batch.expiryDate ? dateOnlyStr(batch.expiryDate) : null) !== (l.expiryDate ?? null)) {
         throw new ValidationError(`Lot ${lot} pehle ${batch.expiryDate ? dateOnlyStr(batch.expiryDate) : 'baghair expiry'} ke saath aa chuka — expiry match nahi.`);
       }
-      batch ??= await tx.stockBatch.create({ data: { itemId: line.itemId, lotNo: lot, expiryDate: l.expiryDate ? dateOnly(l.expiryDate) : null, vendorId: vendor.id, unitCostPaisa: BigInt(l.unitCostPaisa) } });
-      const rl = await tx.goodsReceiptLine.create({ data: { receiptId: receipt.id, demandLineId: line.id, itemId: line.itemId, quantity: l.quantity, unitCostPaisa: BigInt(l.unitCostPaisa), lotNo: lot, expiryDate: batch.expiryDate, batchId: batch.id } });
+      batch ??= await tx.stockBatch.create({ data: { itemId, lotNo: lot, expiryDate: l.expiryDate ? dateOnly(l.expiryDate) : null, vendorId: vendor.id, unitCostPaisa: BigInt(l.unitCostPaisa) } });
+      const rl = await tx.goodsReceiptLine.create({ data: { receiptId: receipt.id, demandLineId: line.id, itemId, quantity: l.quantity, unitCostPaisa: BigInt(l.unitCostPaisa), lotNo: lot, expiryDate: batch.expiryDate, batchId: batch.id } });
       if (!batch.receiptLineId) await tx.stockBatch.update({ where: { id: batch.id }, data: { receiptLineId: rl.id } });
-      await tx.stockTransaction.create({ data: { itemId: line.itemId, batchId: batch.id, type: 'PURCHASE', quantity: l.quantity, unitCostPaisa: BigInt(l.unitCostPaisa), demandId: d.id, receiptId: receipt.id, vendorId: vendor.id, actorId: actor.id!, reason: `Receipt ${input.vendorInvoiceNo ?? ''}`.trim(), idempotencyKey: `receipt:${receipt.id}:${rl.id}` } });
+      await tx.stockTransaction.create({ data: { itemId, batchId: batch.id, type: 'PURCHASE', quantity: l.quantity, unitCostPaisa: BigInt(l.unitCostPaisa), demandId: d.id, receiptId: receipt.id, vendorId: vendor.id, actorId: actor.id!, reason: `Receipt ${input.vendorInvoiceNo ?? ''}`.trim(), idempotencyKey: `receipt:${receipt.id}:${rl.id}` } });
       await tx.stockDemandLine.update({ where: { id: line.id }, data: { receivedQty: { increment: l.quantity } } });
-      await checkLowStock(tx, line.itemId);
+      await checkLowStock(tx, itemId);
     }
     const lines = await tx.stockDemandLine.findMany({ where: { demandId: d.id } });
     const done = lines.every((x) => x.receivedQty >= x.quantity);

@@ -1518,12 +1518,14 @@ model StockDemand {
 }
 
 model StockDemandLine {
-  id               String @id @default(cuid())
+  id               String  @id @default(cuid())
   demandId         String
-  itemId           String
+  /// Null for an Office Boy's written item (D-066): `itemName` holds what they wrote; not a stock item.
+  itemId           String?
+  itemName         String? @db.VarChar(120)
   quantity         Int
-  estUnitCostPaisa BigInt @default(0)
-  receivedQty      Int    @default(0)
+  estUnitCostPaisa BigInt  @default(0)
+  receivedQty      Int     @default(0)
 
   demand StockDemand @relation(fields: [demandId], references: [id])
 

@@ -11,6 +11,7 @@ let managerId: string;
 let md: Api;
 let mdId: string;
 let ob: Api;
+let asst: Api;
 let bankId: string;
 
 beforeAll(async () => {
@@ -21,6 +22,7 @@ beforeAll(async () => {
   md = call(d.agent);
   mdId = d.user.id;
   ob = call((await agentFor('OFFICE_BOY')).agent);
+  asst = call((await agentFor('ASSISTANT')).agent);
   bankId = (await prisma.bankAccount.findFirst({ where: { active: true } }))?.id ?? (await prisma.bankAccount.create({ data: { name: 'Test bank', bankName: 'Test', accountNo: '0000' } })).id;
 });
 
@@ -30,8 +32,8 @@ async function item(minQty = 2) {
 async function vendor() {
   return prisma.vendor.create({ data: { name: `Vendor ${uid()}` } });
 }
-/** Demand by the Office Boy for `qty` of `itemId`, priced by the Manager at `unitRs`. */
-async function demand(itemId: string, qty: number, unitRs: number, by: Api = ob) {
+/** Demand by an Assistant for `qty` of `itemId` (Office Boys write items by name, D-066), priced by the Manager at `unitRs`. */
+async function demand(itemId: string, qty: number, unitRs: number, by: Api = asst) {
   const c = await by.post('/api/stock/demands', { lines: [{ itemId, quantity: qty }], reason: 'Test demand' }, newKey());
   expect(c.status).toBe(201);
   const d = await mgr.get(`/api/inventory/demands/${c.body.id}`);
