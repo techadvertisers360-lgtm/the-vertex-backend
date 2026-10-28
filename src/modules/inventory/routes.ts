@@ -105,14 +105,18 @@ inventoryRouter.get('/bank-accounts', route({ permission: ['stock:manage', 'cash
 // Damage / breakage
 inventoryRouter.post(
   '/damage',
-  route({ permission: 'stock:demand_create', status: 201, body: z.object({ itemId: id, batchId: id.optional(), quantity: z.number().int().min(1), reason, attachmentId: id.optional() }) }, async ({ actor, body }) => stock.reportDamage(actor, body)),
+  // Assistant: { itemId, quantity, batchId? }; Office Boy: { itemName } only (D-068) — the service enforces which per role
+  route(
+    { permission: 'stock:demand_create', status: 201, body: z.object({ itemId: id.optional(), itemName: z.string().trim().min(2).max(120).optional(), batchId: id.optional(), quantity: z.number().int().min(1).optional(), reason, attachmentId: id.optional() }) },
+    async ({ actor, body }) => stock.reportDamage(actor, body),
+  ),
 );
 inventoryRouter.get(
   '/damage/mine',
   route({ permission: 'stock:demand_create' }, async ({ actor }) => {
     const rows = await prisma.damageReport.findMany({ where: { reportedById: actor.id! }, orderBy: { createdAt: 'desc' }, take: 30 });
-    const items = await prisma.stockItem.findMany({ where: { id: { in: rows.map((r) => r.itemId) } }, select: { id: true, name: true, baseUnit: true } });
-    return { items: rows.map((r) => ({ id: r.id, itemName: items.find((i) => i.id === r.itemId)?.name ?? '—', unit: items.find((i) => i.id === r.itemId)?.baseUnit ?? '', quantity: r.quantity, reason: r.reason, status: r.status, decisionReason: r.decisionReason, createdAt: r.createdAt })) };
+    const items = await prisma.stockItem.findMany({ where: { id: { in: rows.flatMap((r) => (r.itemId ? [r.itemId] : [])) } }, select: { id: true, name: true, baseUnit: true } });
+    return { items: rows.map((r) => ({ id: r.id, written: !r.itemId, itemName: r.itemName ?? items.find((i) => i.id === r.itemId)?.name ?? '—', unit: items.find((i) => i.id === r.itemId)?.baseUnit ?? '', quantity: r.quantity, reason: r.reason, status: r.status, decisionReason: r.decisionReason, createdAt: r.createdAt })) };
   }),
 );
 inventoryRouter.get(

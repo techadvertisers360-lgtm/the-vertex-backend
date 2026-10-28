@@ -116,22 +116,39 @@ export async function setBatchStatus(actor: Actor, batchId: string, status: 'QUA
 
 // ───────────── Damage / breakage write-off (Manager approval) ─────────────
 
-export async function reportDamage(actor: Actor, input: { itemId: string; batchId?: string; quantity: number; reason: string; attachmentId?: string }) {
+export interface DamageInput {
+  itemId?: string;
+  /** Office Boy writes what broke by name (D-068) — not a stock item, so no write-off. */
+  itemName?: string;
+  batchId?: string;
+  quantity?: number;
+  reason: string;
+  attachmentId?: string;
+}
+
+export async function reportDamage(actor: Actor, input: DamageInput) {
   if (!input.reason.trim()) throw new ValidationError('Wajah likhein.');
-  if (!Number.isInteger(input.quantity) || input.quantity <= 0) throw new ValidationError('Quantity sahi likhein.');
+  const written = actor.role === 'OFFICE_BOY';
+  const quantity = written ? (input.quantity ?? 1) : input.quantity;
+  if (!quantity || !Number.isInteger(quantity) || quantity <= 0) throw new ValidationError('Quantity sahi likhein.');
+  const itemName = input.itemName?.trim().replace(/\s+/g, ' ') ?? '';
+  if (written && itemName.length < 2) throw new ValidationError('Item ka naam likhein.');
+  if (!written && !input.itemId) throw new ValidationError('Item chunein.');
   return prisma.$transaction(async (tx) => {
-    const item = await tx.stockItem.findUnique({ where: { id: input.itemId } });
-    if (!item) throw new ValidationError('Stock item nahi mila.');
-    if (input.batchId && !(await tx.stockBatch.findFirst({ where: { id: input.batchId, itemId: item.id } }))) throw new ValidationError('Batch is item ka nahi.');
+    const item = written ? null : await tx.stockItem.findUnique({ where: { id: input.itemId } });
+    if (!written && !item) throw new ValidationError('Stock item nahi mila.');
+    if (item && input.batchId && !(await tx.stockBatch.findFirst({ where: { id: input.batchId, itemId: item.id } }))) throw new ValidationError('Batch is item ka nahi.');
     // Approver ≠ requester: damage reported by a Manager is approved by the MD (D-037).
     const approverRole = actor.role === 'MANAGER' ? 'MD' : 'MANAGER';
-    const r = await tx.damageReport.create({ data: { itemId: item.id, batchId: input.batchId ?? null, quantity: input.quantity, reason: input.reason.trim(), reportedById: actor.id!, approverRole } });
+    const r = await tx.damageReport.create({
+      data: { itemId: item?.id ?? null, itemName: item ? null : itemName, batchId: item ? (input.batchId ?? null) : null, quantity, reason: input.reason.trim(), reportedById: actor.id!, approverRole },
+    });
     if (input.attachmentId) {
       await claimAttachments(tx, actor, [input.attachmentId], ['damagePhoto'], 'DamageReport', r.id);
       await tx.damageReport.update({ where: { id: r.id }, data: { attachmentId: input.attachmentId } });
     }
-    await audit(tx, actor, { action: 'DAMAGE_REPORTED', recordType: 'DamageReport', recordId: r.id, after: { itemId: item.id, quantity: input.quantity, batchId: input.batchId }, reason: input.reason });
-    await notifyRoles(tx, [approverRole], { type: 'DAMAGE_REPORTED', subject: `Damage: ${item.name} × ${input.quantity}`, body: `${actor.displayName}: ${input.reason.trim()}`, recordType: 'DamageReport', recordId: r.id, sender: actor, actionLabel: 'Approve / reject', dedupeKey: `damage:${r.id}` });
+    await audit(tx, actor, { action: 'DAMAGE_REPORTED', recordType: 'DamageReport', recordId: r.id, after: { itemId: r.itemId, itemName: r.itemName, quantity, batchId: r.batchId }, reason: input.reason });
+    await notifyRoles(tx, [approverRole], { type: 'DAMAGE_REPORTED', subject: item ? `Damage: ${item.name} × ${quantity}` : `Damage: ${itemName}`, body: `${actor.displayName}: ${input.reason.trim()}`, recordType: 'DamageReport', recordId: r.id, sender: actor, actionLabel: 'Approve / reject', dedupeKey: `damage:${r.id}` });
     return r;
   });
 }
@@ -139,14 +156,15 @@ export async function reportDamage(actor: Actor, input: { itemId: string; batchI
 export async function listDamage(scope: 'pending' | 'all', role: 'MANAGER' | 'MD') {
   const rows = await prisma.damageReport.findMany({ where: { approverRole: role, ...(scope === 'pending' ? { status: 'PENDING' } : {}) }, orderBy: { createdAt: 'desc' }, take: 200 });
   const [items, users, batches] = await Promise.all([
-    prisma.stockItem.findMany({ where: { id: { in: rows.map((r) => r.itemId) } }, select: { id: true, name: true, baseUnit: true } }),
+    prisma.stockItem.findMany({ where: { id: { in: rows.flatMap((r) => (r.itemId ? [r.itemId] : [])) } }, select: { id: true, name: true, baseUnit: true } }),
     prisma.user.findMany({ where: { id: { in: [...new Set(rows.flatMap((r) => [r.reportedById, r.reviewedById].filter((x): x is string => !!x)))] } }, select: { id: true, displayName: true } }),
     prisma.stockBatch.findMany({ where: { id: { in: rows.map((r) => r.batchId).filter((x): x is string => !!x) } }, select: { id: true, lotNo: true } }),
   ]);
   return {
     items: rows.map((r) => ({
       ...r,
-      itemName: items.find((i) => i.id === r.itemId)?.name ?? '—',
+      itemName: r.itemName ?? items.find((i) => i.id === r.itemId)?.name ?? '—',
+      written: !r.itemId,
       unit: items.find((i) => i.id === r.itemId)?.baseUnit ?? '',
       lotNo: batches.find((b) => b.id === r.batchId)?.lotNo ?? null,
       reportedBy: users.find((u) => u.id === r.reportedById)?.displayName ?? null,
@@ -164,25 +182,27 @@ export async function decideDamage(actor: Actor, id: string, approve: boolean, r
     if (r.approverRole !== actor.role) deny('DamageReport', id, 'damage:approver_role');
     if (r.reportedById === actor.id) deny('DamageReport', id, 'damage:no_self_approval');
     if (r.status !== 'PENDING') throw new ConflictError('ALREADY_DECIDED', 'Is report par faisla ho chuka hai.');
-    await tx.$queryRaw`SELECT id FROM stock_items WHERE id = ${r.itemId} FOR UPDATE`;
-    if (approve) {
-      const balances = await batchBalances(tx, r.itemId);
+    // A written report (D-068) has no stock item: approving only records that the Manager accepted it.
+    const itemId = r.itemId;
+    if (itemId) await tx.$queryRaw`SELECT id FROM stock_items WHERE id = ${itemId} FOR UPDATE`;
+    if (approve && itemId) {
+      const balances = await batchBalances(tx, itemId);
       let remaining = r.quantity;
-      const order = r.batchId ? [r.batchId] : [...(await tx.stockBatch.findMany({ where: { itemId: r.itemId }, orderBy: [{ expiryDate: 'asc' }, { createdAt: 'asc' }] }))].map((b) => b.id);
+      const order = r.batchId ? [r.batchId] : [...(await tx.stockBatch.findMany({ where: { itemId }, orderBy: [{ expiryDate: 'asc' }, { createdAt: 'asc' }] }))].map((b) => b.id);
       const total = order.reduce((s, b) => s + Math.max(0, balances.get(b) ?? 0), 0);
       if (total < r.quantity) throw new ConflictError('INSUFFICIENT_STOCK', `Sirf ${total} stock mein hai — write-off ${r.quantity} nahi ho sakta.`);
       for (const b of order) {
         if (!remaining) break;
         const take = Math.min(remaining, Math.max(0, balances.get(b) ?? 0));
         if (!take) continue;
-        await tx.stockTransaction.create({ data: { itemId: r.itemId, batchId: b, type: 'DAMAGE', quantity: -take, actorId: actor.id!, reason: r.reason, idempotencyKey: `damage:${r.id}:${b}` } });
+        await tx.stockTransaction.create({ data: { itemId, batchId: b, type: 'DAMAGE', quantity: -take, actorId: actor.id!, reason: r.reason, idempotencyKey: `damage:${r.id}:${b}` } });
         remaining -= take;
       }
     }
     await tx.damageReport.update({ where: { id }, data: { status: approve ? 'APPROVED' : 'REJECTED', reviewedById: actor.id, reviewedAt: new Date(), decisionReason: reason?.trim() || null } });
-    await audit(tx, actor, { action: approve ? 'DAMAGE_WRITTEN_OFF' : 'DAMAGE_REJECTED', recordType: 'DamageReport', recordId: id, reason });
-    if (r.reportedById !== actor.id) await notifyUsers(tx, [r.reportedById], { type: 'DAMAGE_DECISION', subject: approve ? 'Damage write-off approve' : 'Damage report reject', body: reason?.trim() || '', recordType: 'DamageReport', recordId: id, sender: actor, dedupeKey: `damage:${id}:decided` });
-    if (approve) await checkLowStock(tx, r.itemId);
+    await audit(tx, actor, { action: !approve ? 'DAMAGE_REJECTED' : itemId ? 'DAMAGE_WRITTEN_OFF' : 'DAMAGE_ACKNOWLEDGED', recordType: 'DamageReport', recordId: id, reason });
+    if (r.reportedById !== actor.id) await notifyUsers(tx, [r.reportedById], { type: 'DAMAGE_DECISION', subject: !approve ? 'Damage report reject' : itemId ? 'Damage write-off approve' : 'Damage report Manager ne dekh li', body: reason?.trim() || '', recordType: 'DamageReport', recordId: id, sender: actor, dedupeKey: `damage:${id}:decided` });
+    if (approve && itemId) await checkLowStock(tx, itemId);
     return { id, status: approve ? ('APPROVED' as const) : ('REJECTED' as const) };
   });
 }

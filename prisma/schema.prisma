@@ -1599,7 +1599,9 @@ model SupplierPayment {
 
 model DamageReport {
   id             String        @id @default(cuid())
-  itemId         String
+  /// Null for an Office Boy's written report (D-068): `itemName` holds what they wrote; no stock write-off.
+  itemId         String?
+  itemName       String?       @db.VarChar(120)
   batchId        String?
   quantity       Int
   reason         String        @db.Text

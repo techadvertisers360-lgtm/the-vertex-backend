@@ -187,6 +187,25 @@ describe('§12–13 — stock demands from Office Boy / Assistant; no costs', ()
     const rec = await agentFor('RECEPTIONIST');
     expect((await call(rec.agent).post('/api/stock/demands', { lines: [{ itemId: item.id, quantity: 1 }], reason: 'nope' }, newKey())).status).toBe(403);
   });
+
+  it('D-068 — Office Boy writes a damage report by name; approving it changes no stock', async () => {
+    const { api } = await officeBoy();
+    const item = await prisma.stockItem.create({ data: { name: `Cup ${uid()}`, category: 'pantry', baseUnit: 'piece', minQty: 0 } });
+    expect((await api.post('/api/inventory/damage', { itemId: item.id, quantity: 1, reason: 'Gir gaya' })).status).toBe(422);
+    expect((await api.post('/api/inventory/damage', { itemName: 'Cup', reason: '' })).status).toBe(422);
+    const rep = await api.post('/api/inventory/damage', { itemName: 'Chai ka cup', reason: 'Pantry mein gir kar toot gaya' });
+    expect(rep.status).toBe(201);
+    expect(await prisma.damageReport.findUniqueOrThrow({ where: { id: rep.body.id } })).toMatchObject({ itemId: null, itemName: 'Chai ka cup', quantity: 1, approverRole: 'MANAGER', status: 'PENDING' });
+    expect((await prisma.notification.findFirstOrThrow({ where: { recordId: rep.body.id, type: 'DAMAGE_REPORTED', recipientId: managerId } })).subject).toBe('Damage: Chai ka cup');
+    expect((await api.get('/api/inventory/damage/mine')).body.items[0]).toMatchObject({ id: rep.body.id, written: true, itemName: 'Chai ka cup' });
+
+    const mgr = call((await agentFor('MANAGER')).agent);
+    expect((await mgr.get('/api/inventory/damage?scope=pending')).body.items.find((r: { id: string }) => r.id === rep.body.id)).toMatchObject({ written: true, itemName: 'Chai ka cup' });
+    const before = await prisma.stockTransaction.count();
+    expect((await mgr.post(`/api/inventory/damage/${rep.body.id}/decision`, { approve: true })).body.status).toBe('APPROVED');
+    expect(await prisma.stockTransaction.count()).toBe(before);
+    expect(await prisma.auditEvent.count({ where: { recordId: rep.body.id, action: 'DAMAGE_ACKNOWLEDGED' } })).toBe(1);
+  });
 });
 
 describe('§4 / §22 — Office Boy gets zero patient data', () => {
