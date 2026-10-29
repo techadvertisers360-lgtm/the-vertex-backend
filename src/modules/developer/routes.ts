@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { Role } from '@prisma/client';
+import { Role, UploadRoute } from '@prisma/client';
 import { route } from '../../middleware/route';
 import { prisma } from '../../lib/prisma';
 import { NotFoundError, ValidationError } from '../../lib/errors';
@@ -8,6 +8,7 @@ import { audit } from '../../services/audit';
 import { ROLE_HOME } from '../../auth/permissions';
 import { importStock } from './stockImport';
 import * as geofence from './geofence';
+import { listPhotos } from './photos';
 
 /**
  * Hidden developer console (D-043). Account create / edit / temporary password use /api/users (the developer holds
@@ -128,4 +129,22 @@ developerRouter.patch(
 developerRouter.post(
   '/geofence/role',
   route({ permission: P, body: z.object({ role: z.nativeEnum(Role), required: z.boolean() }) }, async ({ actor, body }) => geofence.setRole(actor, body.role, body.required)),
+);
+
+// Every uploaded photo, newest first (D-072); opening / downloading one goes through /api/files/:id/url (audited)
+developerRouter.get(
+  '/photos',
+  route(
+    {
+      permission: P,
+      query: z.object({
+        route: z.nativeEnum(UploadRoute).optional(),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        cursor: z.string().max(64).optional(),
+        limit: z.coerce.number().int().min(1).max(200).default(60),
+      }),
+    },
+    async ({ query }) => listPhotos(query),
+  ),
 );

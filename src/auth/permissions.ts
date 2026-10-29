@@ -285,6 +285,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'stock-import', label: 'Stock CSV import', path: '/developer/stock-import', permission: 'developer:console' },
     { key: 'service-import', label: 'Procedures / Services import', path: '/developer/service-import', permission: 'developer:console' },
     { key: 'geofence', label: 'Clinic location', path: '/developer/geofence', permission: 'developer:console' },
+    { key: 'photos', label: 'Photos', path: '/developer/photos', permission: 'developer:console' },
     { key: 'audit', label: 'Audit & History', path: '/developer/audit', permission: 'audit:search' },
     { key: 'settings', label: 'Settings', path: '/developer/settings', permission: 'settings:manage' },
   ],

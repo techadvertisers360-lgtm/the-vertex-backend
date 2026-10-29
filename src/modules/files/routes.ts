@@ -55,7 +55,8 @@ filesRouter.get('/:id/content', async (req, res) => {
   if (!upstream.ok || !upstream.body) throw new AppError(502, 'FILE_FETCH_FAILED', 'File abhi load nahi ho saki. Dobara koshish karein.');
   await audit(prisma, actor, { action: 'FILE_ACCESSED', recordType: att.recordType, recordId: att.recordId, after: { attachmentId: att.id } });
   res.setHeader('Content-Type', att.mime);
-  res.setHeader('Content-Disposition', `inline; filename="${att.fileName.replace(/[^\w.\- ]/g, '_')}"`);
+  // ?download=1 saves the file instead of showing it (developer photo gallery, D-072)
+  res.setHeader('Content-Disposition', `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${att.fileName.replace(/[^\w.\- ]/g, '_')}"`);
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const len = upstream.headers.get('content-length');

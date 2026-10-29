@@ -171,6 +171,8 @@ export async function authorizeRead(actor: Actor, att: Attachment, db: Db = pris
   const id = att.recordId;
   const no = (rule: string): never => deny('Attachment', att.id, `read:${rule}`);
   if (!r || !actor.id) return no('anonymous');
+  // Developer sees and downloads every uploaded photo (client 2026-10-29, D-072); each open is audited by the route.
+  if (r === 'DEVELOPER') return;
   if (r === 'OFFICE_BOY' && t !== PENDING && t !== 'StockDemand' && t !== 'DamageReport' && t !== 'OfficeRound') return no('office_boy_no_patient_files');
 
   switch (t) {
