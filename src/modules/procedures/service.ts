@@ -97,7 +97,7 @@ export async function pendingAssignments() {
       return { kind: 'session' as const, planItemId: it.id, appointmentId: s.id, patient: s.patient, doctorId: s.doctorId, procedureName: it.procedureName, sessionNumber: it.sessionNumber, bookedRoomId: s.roomId, advanceRequiredPaisa: 0n, paidPaisa: 0n, paymentOk: true };
     });
   const all = [...sameDay, ...sessionRows];
-  const doctors = await prisma.user.findMany({ where: { id: { in: [...new Set(all.map((a) => a.doctorId))] } }, select: { id: true, displayName: true } });
+  const doctors = await prisma.user.findMany({ where: { id: { in: [...new Set(all.flatMap((a) => a.doctorId ?? []))] } }, select: { id: true, displayName: true } });
   return { items: all.map((a) => ({ ...a, doctorName: doctors.find((d) => d.id === a.doctorId)?.displayName ?? null })) };
 }
 
@@ -119,7 +119,7 @@ export async function plannedToday(assistantId?: string) {
   const mine = assistantId ? tasks.filter((t) => duty.some((d) => d.assistantId === assistantId && d.roomId === t.roomId)) : tasks;
   const [appts, users, patients, rooms, items] = await Promise.all([
     prisma.appointment.findMany({ where: { id: { in: mine.map((t) => t.appointmentId!).filter(Boolean) } }, select: { id: true, startAt: true, status: true } }),
-    prisma.user.findMany({ where: { id: { in: [...mine.map((t) => t.doctorId), ...duty.map((d) => d.assistantId)] } }, select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { id: { in: [...mine.flatMap((t) => t.doctorId ?? []), ...duty.map((d) => d.assistantId)] } }, select: { id: true, displayName: true } }),
     prisma.patient.findMany({ where: { id: { in: mine.map((t) => t.patientId) } }, select: { id: true, name: true } }),
     prisma.room.findMany({ select: { id: true, code: true } }),
     prisma.treatmentPlanItem.findMany({ where: { id: { in: mine.map((t) => t.planItemId) } }, select: { id: true, procedureName: true, sessionNumber: true } }),
@@ -288,10 +288,10 @@ export async function assign(actor: Actor, input: { planItemId: string; assistan
     await audit(tx, actor, { action: 'PROCEDURE_ASSIGNED', recordType: 'ProcedureTask', recordId: task.id, after: { planItemId: item.id, assistantId: assistant.id, roomId: room.id, appointmentId: appointment.id } });
 
     const patient = await tx.patient.findUniqueOrThrow({ where: { id: plan.patientId }, select: { name: true } });
-    const doctor = await tx.user.findUniqueOrThrow({ where: { id: plan.doctorId }, select: { displayName: true } });
-    const body = `${patient.name} · ${item.procedureName} · ${doctor.displayName} · Room ${room.code} · ab (${formatClinic(now, 'h:mm a')})`;
+    const doctor = plan.doctorId ? await tx.user.findUniqueOrThrow({ where: { id: plan.doctorId }, select: { displayName: true } }) : null;
+    const body = `${patient.name} · ${item.procedureName}${doctor ? ` · ${doctor.displayName}` : ''} · Room ${room.code} · ab (${formatClinic(now, 'h:mm a')})`;
     await notifyUsers(tx, [assistant.id], { type: 'PROCEDURE_ASSIGNED', subject: `Naya procedure: ${patient.name}`, body, recordType: 'ProcedureTask', recordId: task.id, sender: actor, priority: 1, actionLabel: 'Accept', dedupeKey: `procedure:${task.id}:assigned` });
-    await notifyUsers(tx, [plan.doctorId], { type: 'PROCEDURE_ASSIGNED', subject: `Procedure assigned: ${patient.name}`, body, recordType: 'Appointment', recordId: appointment.id, sender: actor, dedupeKey: `procedure:${task.id}:doctor` });
+    if (plan.doctorId) await notifyUsers(tx, [plan.doctorId], { type: 'PROCEDURE_ASSIGNED', subject: `Procedure assigned: ${patient.name}`, body, recordType: 'Appointment', recordId: appointment.id, sender: actor, dedupeKey: `procedure:${task.id}:doctor` });
     await liveUpdate(tx, task);
     return { task, replayed: false };
   }, TX_OPTS);
@@ -309,7 +309,7 @@ export async function upcoming(days = 14) {
   });
   const [items, doctors, rooms, reminders] = await Promise.all([
     prisma.treatmentPlanItem.findMany({ where: { id: { in: rows.map((r) => r.treatmentPlanItemId!).filter(Boolean) } }, select: { id: true, procedureName: true, sessionNumber: true } }),
-    prisma.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.doctorId))] } }, select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { id: { in: [...new Set(rows.flatMap((r) => r.doctorId ?? []))] } }, select: { id: true, displayName: true } }),
     prisma.room.findMany({ select: { id: true, code: true } }),
     prisma.messageOutbox.findMany({ where: { relatedType: 'Appointment', relatedId: { in: rows.map((r) => r.id) }, template: 'procedure_reminder' }, select: { relatedId: true, status: true, patientId: true } }),
   ]);

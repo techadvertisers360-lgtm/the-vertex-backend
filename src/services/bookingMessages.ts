@@ -10,7 +10,7 @@ import { journeyChanged } from './tracker';
 export async function appointmentFacts(tx: Tx, a: Appointment) {
   const [patient, doctor, room, service] = await Promise.all([
     tx.patient.findUniqueOrThrow({ where: { id: a.patientId }, select: { id: true, name: true, phone: true, whatsappConsent: true } }),
-    tx.user.findUniqueOrThrow({ where: { id: a.doctorId }, select: { id: true, displayName: true, phone: true } }),
+    a.doctorId ? tx.user.findUniqueOrThrow({ where: { id: a.doctorId }, select: { id: true, displayName: true, phone: true } }) : null,
     a.roomId ? tx.room.findUnique({ where: { id: a.roomId }, select: { code: true } }) : null,
     a.serviceId ? tx.service.findUnique({ where: { id: a.serviceId }, select: { name: true } }) : null,
   ]);
@@ -20,7 +20,7 @@ export async function appointmentFacts(tx: Tx, a: Appointment) {
     payload: {
       appointmentId: a.id,
       patientName: patient.name,
-      doctorName: doctor.displayName,
+      doctorName: doctor?.displayName ?? null,
       when: formatClinic(a.startAt),
       startAt: a.startAt,
       type: a.type === 'PROCEDURE' ? 'Procedure' : 'Consultation',
@@ -62,7 +62,7 @@ export async function announceAppointment(tx: Tx, actor: Actor, a: Appointment, 
       createdById: actor.id,
     });
   }
-  if (doctor.phone) {
+  if (doctor?.phone) {
     await enqueueMessage(tx, {
       template,
       toPhone: doctor.phone,
@@ -75,9 +75,9 @@ export async function announceAppointment(tx: Tx, actor: Actor, a: Appointment, 
     });
   }
 
-  const body = `${payload.patientName} · ${payload.doctorName} · ${payload.when} · ${payload.type}${payload.service ? ` (${payload.service})` : ''}${payload.room ? ` · Room ${payload.room}` : ''}`;
+  const body = `${payload.patientName}${payload.doctorName ? ` · ${payload.doctorName}` : ''} · ${payload.when} · ${payload.type}${payload.service ? ` (${payload.service})` : ''}${payload.room ? ` · Room ${payload.room}` : ''}`;
   const n = { type: `APPOINTMENT_${event.toUpperCase()}`, subject: SUBJECT[event], body, recordType: 'Appointment', recordId: a.id, sender: actor, actionLabel: 'Open appointment' };
-  await notifyUsers(tx, [doctor.id], { ...n, dedupeKey: `appointment:${a.id}:${event}:doctor` });
+  if (doctor) await notifyUsers(tx, [doctor.id], { ...n, dedupeKey: `appointment:${a.id}:${event}:doctor` });
   await notifyRoles(tx, ['RECEPTIONIST'], { ...n, dedupeKey: `appointment:${a.id}:${event}:reception` });
   if (a.leadMemberId && a.leadMemberId !== actor.id) {
     await notifyUsers(tx, [a.leadMemberId], { ...n, dedupeKey: `appointment:${a.id}:${event}:lead` });

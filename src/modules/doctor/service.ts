@@ -131,7 +131,7 @@ export async function patientHistory(actor: Actor, patientId: string) {
     }),
     prisma.invoice.findMany({ where: { appointmentId: { in: ids } }, select: { id: true, appointmentId: true } }),
     prisma.procedureTask.findMany({ where: { appointmentId: { in: ids } }, select: { id: true, appointmentId: true } }),
-    prisma.user.findMany({ where: { id: { in: [...new Set(visits.map((v) => v.doctorId))] } }, select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { id: { in: [...new Set(visits.flatMap((v) => v.doctorId ?? []))] } }, select: { id: true, displayName: true } }),
   ]);
   // Clinical documents (prescription, consent, before/after) — metadata only; opened through /api/files (scope-checked).
   const attachments = await prisma.attachment.findMany({

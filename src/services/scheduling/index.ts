@@ -361,12 +361,14 @@ export async function rescheduleInTx(tx: Tx, actor: Actor, appointmentId: string
   if (old.status !== 'CONFIRMED' && old.status !== 'DRAFT') {
     throw new ConflictError('NOT_RESCHEDULABLE', 'Sirf confirmed (check-in se pehle) appointment reschedule ho sakti hai.');
   }
-  await lockForScheduling(tx, [old.doctorId], roomKindsFor(old.type));
+  if (!old.doctorId) throw new ConflictError('NOT_RESCHEDULABLE', 'Is visit ka koi Doctor nahi — reschedule nahi ho sakti.');
+  const doctorId = old.doctorId;
+  await lockForScheduling(tx, [doctorId], roomKindsFor(old.type));
   const fresh = await tx.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
   if (fresh.status !== old.status) throw new ConflictError('STATUS_CHANGED', 'Is appointment ka status abhi badal gaya. Refresh karein.');
 
   const durationMin = Math.round((old.endAt.getTime() - old.startAt.getTime()) / 60_000);
-  const data = await loadEngineData(tx, { doctorId: old.doctorId, type: old.type, fromDate: clinicDateStr(input.start), excludeAppointmentIds: [old.id] });
+  const data = await loadEngineData(tx, { doctorId, type: old.type, fromDate: clinicDateStr(input.start), excludeAppointmentIds: [old.id] });
   const req: SlotRequest = { type: old.type, start: input.start, durationMin, roomId: input.roomId };
   const res = checkSlot(data, req);
   if (!res.ok) throw new SlotUnavailableError(res.conflicts, suggest(data, req), data.roomCodes);

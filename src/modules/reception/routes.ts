@@ -94,7 +94,7 @@ receptionRouter.post(
       body: z.object({
         patientId: z.string().min(1),
         intent: z.enum(['CONSULTATION', 'PROCEDURE_DOCTOR', 'PROCEDURE_ASSISTANT']),
-        doctorId: z.string().min(1),
+        doctorId: z.string().min(1).optional(), // required except for a procedure done by an Assistant (D-076)
         serviceId: z.string().optional(),
         pricePaisa: z.number().int().min(0).max(100_000_000_00).optional(),
         reason: z.string().max(1000).optional(),

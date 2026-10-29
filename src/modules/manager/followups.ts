@@ -21,7 +21,7 @@ export async function list(scope: 'pending' | 'done', date?: string) {
     prisma.appointment.findMany({ where: { id: { in: rows.map((r) => r.appointmentId) } }, select: { id: true, startAt: true, doctorId: true, type: true } }),
     prisma.feedback.findMany({ where: { appointmentId: { in: rows.map((r) => r.appointmentId) } }, select: { appointmentId: true, doctorRating: true, staffRating: true, clinicRating: true, suggestion: true, submittedAt: true, skipped: true } }),
   ]);
-  const doctors = await prisma.user.findMany({ where: { id: { in: appts.map((a) => a.doctorId) } }, select: { id: true, displayName: true } });
+  const doctors = await prisma.user.findMany({ where: { id: { in: appts.flatMap((a) => a.doctorId ?? []) } }, select: { id: true, displayName: true } });
   return {
     items: rows.map((r) => {
       const a = appts.find((x) => x.id === r.appointmentId);

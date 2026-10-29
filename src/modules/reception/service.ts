@@ -294,7 +294,7 @@ export async function checkInTx(tx: Tx, actor: Actor, appointmentId: string) {
   }
   await transitionAppointment(tx, actor, a, 'CHECKED_IN', { data: { checkedInAt: now, checkedInById: actor.id } });
   const doctorNotice = { recordType: 'Appointment', recordId: a.id, sender: actor, actionLabel: 'Open queue' };
-  await notifyUsers(tx, [a.doctorId], { ...doctorNotice, type: 'PATIENT_WAITING', subject: `Patient waiting: ${a.patient.name}`, body: `Arrived ${formatClinic(now, 'h:mm a')} · appointment ${formatClinic(a.startAt, 'h:mm a')}`, dedupeKey: `checkin:${a.id}:doctor` });
+  if (a.doctorId) await notifyUsers(tx, [a.doctorId], { ...doctorNotice, type: 'PATIENT_WAITING', subject: `Patient waiting: ${a.patient.name}`, body: `Arrived ${formatClinic(now, 'h:mm a')} · appointment ${formatClinic(a.startAt, 'h:mm a')}`, dedupeKey: `checkin:${a.id}:doctor` });
   if (a.leadMemberId) {
     await notifyUsers(tx, [a.leadMemberId], { ...doctorNotice, actionLabel: 'Open appointment', type: 'PATIENT_CHECKED_IN', subject: `Patient checked in: ${a.patient.name}`, body: formatClinic(now), dedupeKey: `checkin:${a.id}:lead` });
   }
@@ -567,7 +567,7 @@ export async function closeInvoice(actor: Actor, invoiceId: string) {
     feedback ??= await tx.feedback.create({ data: { appointmentId: appt.id, patientId: appt.patientId, token: randomToken(24) } });
     const askFeedback = !feedback.submittedAt && !feedback.skipped;
 
-    await notifyUsers(tx, [appt.doctorId], { type: 'PATIENT_DONE', subject: `Patient done: ${appt.patient.name}`, body: 'Aftercare / medication guidance bhejein ya Skip karein.', recordType: 'Appointment', recordId: appt.id, sender: actor, actionLabel: 'Aftercare', dedupeKey: `done:${appt.id}:doctor` });
+    if (appt.doctorId) await notifyUsers(tx, [appt.doctorId], { type: 'PATIENT_DONE', subject: `Patient done: ${appt.patient.name}`, body: 'Aftercare / medication guidance bhejein ya Skip karein.', recordType: 'Appointment', recordId: appt.id, sender: actor, actionLabel: 'Aftercare', dedupeKey: `done:${appt.id}:doctor` });
     await tx.workflowTask.upsert({
       where: { idempotencyKey: `appointment:${appt.id}:aftercare` },
       update: {},

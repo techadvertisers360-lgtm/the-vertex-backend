@@ -12,7 +12,7 @@ import { checkInTx } from './service';
  *  - CONSULTATION / PROCEDURE_DOCTOR: booked at the Doctor's earliest free slot today and checked in at once, so the
  *    patient is in the Doctor's queue; the normal Doctor → Reception → invoice flow follows.
  *  - PROCEDURE_ASSISTANT: no consultation. A same-day procedure (price = service price, Reception may change it) is
- *    put on a one-line plan under the Doctor Reception names as Doctor of record; the patient is at Reception and the
+ *    put on a one-line plan; Reception may name a Doctor of record or leave it empty (D-076); the patient is at Reception and the
  *    procedure waits for an Assistant + room (same Assign flow as every same-day procedure). The Doctor's calendar is
  *    not taken. The invoice comes from that plan; closing it still needs the prescription photo (spec §4 lock 4).
  * Pharmacy-only walk-ins use the counter sale (D-061).
@@ -22,7 +22,7 @@ export type WalkInIntent = 'CONSULTATION' | 'PROCEDURE_DOCTOR' | 'PROCEDURE_ASSI
 export interface WalkInInput {
   patientId: string;
   intent: WalkInIntent;
-  doctorId: string;
+  doctorId?: string;
   serviceId?: string;
   pricePaisa?: number;
   reason?: string;
@@ -34,11 +34,13 @@ export async function walkIn(actor: Actor, input: WalkInInput, idempotencyKey: s
   if (replay) return result(replay.id, true);
   if (input.intent !== 'CONSULTATION' && !input.serviceId) throw new ValidationError('Procedure chunein.');
   if (input.intent === 'PROCEDURE_ASSISTANT') return assistantProcedure(actor, input, key);
+  if (!input.doctorId) throw new ValidationError('Doctor chunein.');
+  const doctorId = input.doctorId;
 
   // Doctor sees the patient: the earliest free slot today, then check-in in the same transaction.
   const type = input.intent === 'CONSULTATION' ? 'CONSULTATION' : 'PROCEDURE';
   const today = clinicDateStr(new Date());
-  const day = await daySlots({ doctorId: input.doctorId, type, date: today, serviceId: input.serviceId });
+  const day = await daySlots({ doctorId, type, date: today, serviceId: input.serviceId });
   const first = day.slots[0];
   if (!first) {
     const next = day.nextAvailable[0];
@@ -47,7 +49,7 @@ export async function walkIn(actor: Actor, input: WalkInInput, idempotencyKey: s
   const id = await prisma.$transaction(async (tx) => {
     const { appointment } = await bookInTx(tx, actor, {
       patientId: input.patientId,
-      doctorId: input.doctorId,
+      doctorId,
       type,
       serviceId: input.serviceId ?? null,
       reason: input.reason?.trim() || 'Walk-in',
@@ -68,11 +70,12 @@ async function assistantProcedure(actor: Actor, input: WalkInInput, key: string)
   const id = await prisma.$transaction(async (tx) => {
     const [patient, doctor, svc] = await Promise.all([
       tx.patient.findUnique({ where: { id: input.patientId }, select: { id: true } }),
-      tx.user.findUnique({ where: { id: input.doctorId }, select: { role: true, active: true } }),
+      input.doctorId ? tx.user.findUnique({ where: { id: input.doctorId }, select: { role: true, active: true } }) : null,
       tx.service.findUnique({ where: { id: input.serviceId! } }),
     ]);
     if (!patient) throw new NotFoundError('Patient');
-    if (!doctor || doctor.role !== 'DOCTOR' || !doctor.active) throw new ValidationError('Doctor chunein.');
+    if (input.doctorId && (!doctor || doctor.role !== 'DOCTOR' || !doctor.active)) throw new ValidationError('Doctor chunein.');
+    const doctorId = input.doctorId ?? null;
     if (!svc || !svc.active || svc.type !== 'PROCEDURE') throw new ValidationError('Procedure chunein.');
     const price = BigInt(input.pricePaisa ?? Number(svc.defaultPricePaisa ?? 0n));
     const now = new Date();
@@ -80,14 +83,14 @@ async function assistantProcedure(actor: Actor, input: WalkInInput, key: string)
 
     // Seen by nobody yet: `sentToReceptionAt = start` keeps the Doctor of record's calendar free (D-073).
     const appt = await tx.appointment.create({
-      data: { patientId: patient.id, doctorId: input.doctorId, type: 'PROCEDURE', serviceId: svc.id, reason: input.reason?.trim() || `Walk-in: ${svc.name}`, startAt: now, endAt: end, status: 'CONFIRMED', source: 'RECEPTION', createdById: actor.id!, idempotencyKey: key },
+      data: { patientId: patient.id, doctorId, type: 'PROCEDURE', serviceId: svc.id, reason: input.reason?.trim() || `Walk-in: ${svc.name}`, startAt: now, endAt: end, status: 'CONFIRMED', source: 'RECEPTION', createdById: actor.id!, idempotencyKey: key },
     });
     await tx.appointmentStatusHistory.create({ data: { appointmentId: appt.id, fromStatus: null, toStatus: 'CONFIRMED', actorId: actor.id, reason: 'Walk-in' } });
     await audit(tx, actor, { action: 'APPOINTMENT_CREATED', recordType: 'Appointment', recordId: appt.id, after: appt });
     await transitionAppointment(tx, actor, appt, 'CHECKED_IN', { data: { checkedInAt: now, checkedInById: actor.id } });
     await transitionAppointment(tx, actor, { id: appt.id, status: 'CHECKED_IN' }, 'RECEPTION', { reason: 'Walk-in procedure — Assistant karega', data: { sentToReceptionAt: now } });
 
-    const plan = await tx.treatmentPlan.create({ data: { patientId: patient.id, doctorId: input.doctorId, appointmentId: appt.id, currentVersionNo: 1 } });
+    const plan = await tx.treatmentPlan.create({ data: { patientId: patient.id, doctorId, appointmentId: appt.id, currentVersionNo: 1 } });
     const version = await tx.treatmentPlanVersion.create({
       data: {
         planId: plan.id,

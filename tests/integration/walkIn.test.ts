@@ -69,6 +69,20 @@ describe('D-075 — walk-in desk', () => {
     expect(inv.body).toMatchObject({ totalPaisa: 450_000 });
   });
 
+  it('procedure by an Assistant with no Doctor (D-076): allowed, assignable and billable; consultation still needs a Doctor', async () => {
+    const p = await newPatient();
+    const svc = await prisma.service.create({ data: { name: `Laser ${uid()}`, type: 'PROCEDURE', defaultPricePaisa: 300_000n, durationMin: 30 } });
+    const res = await rec.post('/api/reception/walk-in', { patientId: p.id, intent: 'PROCEDURE_ASSISTANT', serviceId: svc.id }, newKey());
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.appointment).toMatchObject({ status: 'RECEPTION', doctorId: null });
+    const pending = await rec.get('/api/reception/procedures/pending');
+    expect(pending.body.items.some((i: { planItemId: string }) => i.planItemId === res.body.planItemId)).toBe(true);
+    const inv = await rec.post(`/api/reception/appointments/${res.body.appointment.id}/invoice`);
+    expect(inv.status).toBe(201);
+    expect(inv.body).toMatchObject({ totalPaisa: 300_000 });
+    expect((await rec.post('/api/reception/walk-in', { patientId: p.id, intent: 'CONSULTATION' }, newKey())).status).toBe(400);
+  });
+
   it('procedure needs a service; Office Boy cannot use the desk', async () => {
     const doctor = await allDayDoctor();
     const p = await newPatient();

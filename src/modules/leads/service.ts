@@ -405,7 +405,7 @@ export async function listMyAppointments(actor: Actor, bucket: Bucket, now = new
       doctorId: true,
     },
   });
-  const doctors = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.map((x) => x.doctorId))] } }, select: { id: true, displayName: true } });
+  const doctors = await prisma.user.findMany({ where: { id: { in: [...new Set(rows.flatMap((x) => x.doctorId ?? []))] } }, select: { id: true, displayName: true } });
   const rooms = await prisma.room.findMany({ select: { id: true, code: true } });
   const counts = await bucketCounts(actor, now);
   return {

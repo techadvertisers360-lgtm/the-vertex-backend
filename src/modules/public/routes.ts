@@ -29,7 +29,7 @@ async function findByToken(req: Request) {
 publicRouter.get('/feedback/:token', async (req, res) => {
   const f = await findByToken(req);
   const appt = await prisma.appointment.findUniqueOrThrow({ where: { id: f.appointmentId }, select: { startAt: true, doctorId: true, patient: { select: { name: true } } } });
-  const doctor = await prisma.user.findUnique({ where: { id: appt.doctorId }, select: { displayName: true } });
+  const doctor = appt.doctorId ? await prisma.user.findUnique({ where: { id: appt.doctorId }, select: { displayName: true } }) : null;
   res.json({
     clinic: 'The Vertex Health',
     patientFirstName: appt.patient.name.split(' ')[0],

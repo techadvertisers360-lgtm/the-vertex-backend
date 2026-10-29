@@ -718,7 +718,7 @@ model DoctorAvailabilityException {
 model Appointment {
   id                  String            @id @default(cuid())
   patientId           String
-  doctorId            String
+  doctorId            String? // null: walk-in procedure done by an Assistant with no Doctor (D-076)
   type                AppointmentType
   serviceId           String?
   reason              String?           @db.Text
@@ -852,7 +852,7 @@ model Vitals {
 model TreatmentPlan {
   id               String   @id @default(cuid())
   patientId        String
-  doctorId         String
+  doctorId         String? // null: walk-in Assistant procedure with no Doctor (D-076)
   appointmentId    String   @unique // originating consultation
   currentVersionNo Int      @default(0)
   createdAt        DateTime @default(now())
@@ -1082,7 +1082,7 @@ model ProcedureTask {
   planItemId              String        @unique
   appointmentId           String?
   patientId               String
-  doctorId                String
+  doctorId                String? // null: walk-in Assistant procedure with no Doctor (D-076)
   roomId                  String?
   assistantId             String?
   status                  TaskStatus    @default(PENDING)

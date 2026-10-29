@@ -33,7 +33,8 @@ async function sessionFacts(tx: Tx, appointmentId: string) {
     include: { patient: { select: { id: true, name: true, phone: true } } },
   });
   const [doctor, room, item, service] = await Promise.all([
-    tx.user.findUniqueOrThrow({ where: { id: a.doctorId }, select: { id: true, displayName: true, phone: true } }),
+    // Released sessions come from a Doctor's plan, so they always have a Doctor (only walk-in Assistant procedures do not, D-076).
+    tx.user.findUniqueOrThrow({ where: { id: a.doctorId! }, select: { id: true, displayName: true, phone: true } }),
     a.roomId ? tx.room.findUnique({ where: { id: a.roomId }, select: { id: true, code: true } }) : null,
     a.treatmentPlanItemId ? tx.treatmentPlanItem.findUnique({ where: { id: a.treatmentPlanItemId }, select: { id: true, procedureName: true, sessionNumber: true } }) : null,
     a.serviceId ? tx.service.findUnique({ where: { id: a.serviceId }, select: { name: true } }) : null,

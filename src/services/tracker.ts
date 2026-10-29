@@ -9,5 +9,5 @@ import { publish, roleRoom, userRoom } from './realtime';
  */
 export async function journeyChanged(db: Db, appt: Pick<Appointment, 'id' | 'doctorId' | 'status'>): Promise<void> {
   await publish(db, [roleRoom('RECEPTIONIST'), roleRoom('MANAGER')], 'tracker:changed', { appointmentId: appt.id, status: appt.status });
-  await publish(db, [userRoom(appt.doctorId)], 'queue:changed', { appointmentId: appt.id, status: appt.status });
+  if (appt.doctorId) await publish(db, [userRoom(appt.doctorId)], 'queue:changed', { appointmentId: appt.id, status: appt.status });
 }
