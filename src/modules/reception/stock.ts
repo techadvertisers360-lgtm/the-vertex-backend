@@ -5,7 +5,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { clinicDateStr, dateOnly, dateOnlyStr } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
 import { notifyRoles, notifyUsers } from '../../services/notifications';
-import { batchBalances, checkLowStock, onHand, usableBatches } from '../../services/stock';
+import { batchBalances, checkLowStock, nextItemCodes, onHand, usableBatches } from '../../services/stock';
 
 /**
  * Reception "Stock & batches" (client 2026-10-20, D-048): two categories — products used in procedures and products
@@ -37,15 +37,10 @@ export async function list(kind: StockKind) {
           id: i.id,
           name: i.name,
           unit: i.baseUnit,
-          // the columns of the stock CSV (D-055 / D-057)
+          // procedure catalogue columns (D-057); Item ID is generated (D-069)
           code: i.code,
-          category: i.category,
-          department: i.department,
           procedureUse: i.procedureUse,
-          packUnit: i.packUnit,
           packSize: i.packSize,
-          itemType: i.itemType,
-          sterile: i.sterile,
           note: i.note,
           salePricePaisa: i.salePricePaisa,
           /** Batches with stock left (pharmacy table: one row per batch). */
@@ -89,33 +84,22 @@ export interface AddStockInput {
   details?: ProductDetails;
 }
 
+/** Item ID is generated (D-069); Stock Category, Department, Purchase Unit, Item Type and Sterile were dropped from the form. */
 export interface ProductDetails {
-  code?: string;
-  category?: string;
-  department?: string;
   procedureUse?: string;
-  packUnit?: string;
   packSize?: number;
-  itemType?: string;
-  sterile?: boolean;
   note?: string;
 }
 
-type DetailFields = Pick<StockItem, 'code' | 'category' | 'department' | 'procedureUse' | 'packUnit' | 'packSize' | 'itemType' | 'sterile' | 'note'>;
-const NO_DETAILS: DetailFields = { code: null, category: '', department: null, procedureUse: null, packUnit: null, packSize: null, itemType: null, sterile: null, note: null };
+type DetailFields = Pick<StockItem, 'procedureUse' | 'packSize' | 'note'>;
+const NO_DETAILS: DetailFields = { procedureUse: null, packSize: null, note: null };
 
 /** Only the fields that were filled in and differ from the product (a blank never wipes a value). */
 function detailChanges(item: DetailFields, d: ProductDetails = {}): Partial<DetailFields> {
   const t = (v?: string) => v?.trim().replace(/\s+/g, ' ') || undefined;
   const want: Partial<DetailFields> = {
-    code: t(d.code),
-    category: t(d.category),
-    department: t(d.department),
     procedureUse: t(d.procedureUse),
-    packUnit: t(d.packUnit),
     packSize: d.packSize || undefined,
-    itemType: t(d.itemType),
-    sterile: d.sterile,
     note: t(d.note),
   };
   return Object.fromEntries(Object.entries(want).filter(([k, v]) => v !== undefined && v !== item[k as keyof DetailFields]));
@@ -136,16 +120,10 @@ export async function addStock(actor: Actor, input: AddStockInput, idempotencyKe
   return prisma.$transaction(async (tx) => {
     const replay = await tx.stockIntake.findUnique({ where: { idempotencyKey: key } });
     if (replay) return { itemId: replay.itemId, intakeId: replay.id, status: replay.status, replayed: true };
-    const code = input.kind === 'PROCEDURE' ? input.details?.code?.trim() : undefined;
-    if (code) {
-      const owner = await tx.stockItem.findUnique({ where: { code }, select: { name: true } });
-      if (owner && owner.name.toLowerCase() !== name.toLowerCase()) throw new ConflictError('ITEM_CODE_TAKEN', `Item ID "${code}" pehle se "${owner.name}" ka hai.`);
-    }
-
     let item = await tx.stockItem.findFirst({ where: { name } });
     if (item && item.kind !== input.kind) throw new ConflictError('ITEM_OTHER_CATEGORY', `"${item.name}" pehle se ${KIND_LABEL[item.kind]} mein hai.`);
     if (!item) {
-      const d = input.kind === 'PROCEDURE' ? detailChanges(NO_DETAILS, input.details) : {};
+      const d = input.kind === 'PROCEDURE' ? { ...detailChanges(NO_DETAILS, input.details), code: (await nextItemCodes(tx))[0] } : {};
       item = await tx.stockItem.create({ data: { name, kind: input.kind, category: KIND_LABEL[input.kind], baseUnit: input.unit?.trim() || 'piece', minQty: input.minQty ?? 0, ...d } });
       await audit(tx, actor, { action: 'STOCK_ITEM_CREATED', recordType: 'StockItem', recordId: item.id, after: item });
     } else {
@@ -294,7 +272,7 @@ export interface UpdateProductInput {
   pricePaisa?: number;
   active?: boolean;
   unit?: string;
-  /** Procedure catalogue fields (D-058): a string sets the field, null / "" clears it. */
+  /** Procedure catalogue fields (D-058): a string sets the field, null / "" clears it. Item ID is not editable (D-069). */
   details?: { [K in keyof ProductDetails]?: ProductDetails[K] | null };
 }
 
@@ -311,9 +289,6 @@ export async function updateProduct(actor: Actor, id: string, input: UpdateProdu
     if (name && name !== before.name && (await tx.stockItem.findFirst({ where: { name, id: { not: id } } }))) throw new ConflictError('ITEM_EXISTS', 'Is naam ka product pehle se hai.');
     const clean = (v: string | null | undefined) => (v === undefined ? undefined : v?.trim().replace(/\s+/g, ' ') || null);
     const d = before.kind === 'PROCEDURE' ? (input.details ?? {}) : {};
-    const code = clean(d.code);
-    if (code && code !== before.code && (await tx.stockItem.findFirst({ where: { code, id: { not: id } } }))) throw new ConflictError('ITEM_CODE_TAKEN', `Item ID "${code}" pehle se kisi aur product ka hai.`);
-    const category = clean(d.category);
     const after = await tx.stockItem.update({
       where: { id },
       data: {
@@ -322,14 +297,8 @@ export async function updateProduct(actor: Actor, id: string, input: UpdateProdu
         ...(input.minQty !== undefined ? { minQty: input.minQty } : {}),
         ...(input.active !== undefined ? { active: input.active } : {}),
         ...(input.pricePaisa !== undefined && before.kind === 'PHARMACY' ? { salePricePaisa: BigInt(input.pricePaisa) } : {}),
-        ...(code !== undefined ? { code } : {}),
-        ...(category !== undefined ? { category: category ?? 'Procedure' } : {}),
-        ...(clean(d.department) !== undefined ? { department: clean(d.department) } : {}),
         ...(clean(d.procedureUse) !== undefined ? { procedureUse: clean(d.procedureUse) } : {}),
-        ...(clean(d.packUnit) !== undefined ? { packUnit: clean(d.packUnit) } : {}),
         ...(d.packSize !== undefined ? { packSize: d.packSize || null } : {}),
-        ...(clean(d.itemType) !== undefined ? { itemType: clean(d.itemType) } : {}),
-        ...(d.sterile !== undefined ? { sterile: d.sterile } : {}),
         ...(clean(d.note) !== undefined ? { note: clean(d.note) } : {}),
       },
     });

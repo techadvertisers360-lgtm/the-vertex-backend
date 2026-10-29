@@ -102,3 +102,13 @@ export async function checkLowStock(tx: Tx, itemId: string): Promise<void> {
     actionLabel: 'Demand / purchase',
   });
 }
+
+/**
+ * Next procedure product Item ID in the one sequence P-0001, P-0002, … (D-069). Called inside the creating
+ * transaction; the unique `code` index stops two parallel creates from getting the same number.
+ */
+export async function nextItemCodes(tx: Tx, count = 1): Promise<string[]> {
+  const [row] = await tx.$queryRaw<{ n: bigint | number | null }[]>`SELECT MAX(CAST(SUBSTRING(code, 3) AS UNSIGNED)) AS n FROM stock_items WHERE code REGEXP '^P-[0-9]+$' FOR UPDATE`;
+  const last = Number(row?.n ?? 0);
+  return Array.from({ length: count }, (_, i) => `P-${String(last + i + 1).padStart(4, '0')}`);
+}

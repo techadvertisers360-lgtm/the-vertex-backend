@@ -6,7 +6,7 @@ import { claimAttachments } from '../../services/files';
 import { notifyRoles, notifyUsers } from '../../services/notifications';
 import { deny } from '../../services/scope';
 import { getSetting } from '../../services/settings';
-import { batchBalances, checkLowStock, onHand, usableBatches } from '../../services/stock';
+import { batchBalances, checkLowStock, nextItemCodes, onHand, usableBatches } from '../../services/stock';
 
 /**
  * Stock overview (spec §18): quantities come only from the ledger. Usable stock excludes expired and quarantined
@@ -84,7 +84,8 @@ export async function createItem(actor: Actor, input: { name: string; category: 
   const name = input.name.trim();
   return prisma.$transaction(async (tx) => {
     if (await tx.stockItem.findUnique({ where: { name } })) throw new ConflictError('ITEM_EXISTS', 'Is naam ka item pehle se hai.');
-    const it = await tx.stockItem.create({ data: { name, category: input.category.trim(), baseUnit: input.baseUnit.trim(), packUnit: input.packUnit?.trim() || null, packSize: input.packSize ?? null, minQty: input.minQty, preferredVendorId: input.preferredVendorId ?? null } });
+    const [code] = await nextItemCodes(tx);
+    const it = await tx.stockItem.create({ data: { name, code, category: input.category.trim(), baseUnit: input.baseUnit.trim(), packUnit: input.packUnit?.trim() || null, packSize: input.packSize ?? null, minQty: input.minQty, preferredVendorId: input.preferredVendorId ?? null } });
     await audit(tx, actor, { action: 'STOCK_ITEM_CREATED', recordType: 'StockItem', recordId: it.id, after: it });
     return it;
   });

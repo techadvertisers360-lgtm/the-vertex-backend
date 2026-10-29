@@ -29,7 +29,11 @@ describe('D-055 — stock CSV import', () => {
     const run = await dev.post('/api/developer/stock-import', { kind: 'PROCEDURE', csv, fileName: 'proc.csv', dryRun: false });
     expect(run.status).toBe(200);
     const gloves = await prisma.stockItem.findUniqueOrThrow({ where: { name: `Gloves ${t}` } });
-    expect(gloves).toMatchObject({ kind: 'PROCEDURE', code: `P-${t}-1`, category: 'Consumables', department: 'Derma', procedureUse: 'Hydrafacial; PRP', baseUnit: 'piece', packUnit: 'box', packSize: 100, sterile: true, note: 'Medium size' });
+    // the file's Item ID is ignored; the app gives the next numbers in its sequence (D-069)
+    expect(gloves.code).toMatch(/^P-\d{4,}$/);
+    const syringe = await prisma.stockItem.findUniqueOrThrow({ where: { name: `Syringe ${t}` } });
+    expect(Number(syringe.code!.slice(2))).toBe(Number(gloves.code!.slice(2)) + 1);
+    expect(gloves).toMatchObject({ kind: 'PROCEDURE', category: 'Consumables', department: 'Derma', procedureUse: 'Hydrafacial; PRP', baseUnit: 'piece', packUnit: 'box', packSize: 100, sterile: true, note: 'Medium size' });
     expect(await prisma.auditEvent.count({ where: { action: 'STOCK_CSV_IMPORTED', after: { path: '$.fileName', equals: 'proc.csv' } } })).toBeGreaterThan(0);
 
     const again = await dev.post('/api/developer/stock-import', { kind: 'PROCEDURE', csv, dryRun: false });
@@ -91,12 +95,17 @@ describe('D-055 — stock CSV import', () => {
     const t = uid();
     const rec = call((await agentFor('RECEPTIONIST')).agent);
     const mgr = call((await agentFor('MANAGER')).agent);
-    const details = { code: `R-${t}`, category: 'Consumables', department: 'Derma', procedureUse: 'PRP', packUnit: 'box', packSize: 50, itemType: 'Disposable', sterile: true, note: 'Small' };
+    const details = { procedureUse: 'PRP', packSize: 50, note: 'Small' };
     const only = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Needle ${t}`, quantity: 0, pricePaisa: 0, unit: 'piece', details }, newKey());
     expect(only.status, JSON.stringify(only.body)).toBe(201);
     expect(only.body.intakeId).toBeNull();
     const proc = await rec.get('/api/reception/stock?kind=PROCEDURE');
-    expect(proc.body.items.find((i: { name: string }) => i.name === `Needle ${t}`)).toMatchObject({ ...details, unit: 'piece', onHand: 0, low: false });
+    expect(proc.body.items.find((i: { name: string }) => i.name === `Needle ${t}`)).toMatchObject({ ...details, code: expect.stringMatching(/^P-\d{4,}$/), unit: 'piece', onHand: 0, low: false });
+    // D-069 — a typed Item ID is ignored; the next product gets the next number
+    const next = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Needle B ${t}`, quantity: 0, pricePaisa: 0, details: { code: 'MINE-1' } }, newKey());
+    expect(next.status).toBe(201);
+    const [a, b] = await Promise.all([`Needle ${t}`, `Needle B ${t}`].map((name) => prisma.stockItem.findUniqueOrThrow({ where: { name } })));
+    expect(Number(b.code!.slice(2))).toBe(Number(a.code!.slice(2)) + 1);
 
     const add = await rec.post('/api/reception/stock', { kind: 'PHARMACY', name: `Serum ${t}`, quantity: 4, pricePaisa: 250_000, costPaisa: 150_000, lotNo: `LOT-${t}`, distributor: `Dist ${t}`, unit: 'bottle', expiryDate: '2031-01-31' }, newKey());
     expect(add.status).toBe(201);
@@ -111,11 +120,11 @@ describe('D-055 — stock CSV import', () => {
   it('D-058 — Reception edits any column, clears one, deletes (hides) and brings back a product', async () => {
     const t = uid();
     const rec = call((await agentFor('RECEPTIONIST')).agent);
-    const made = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Cannula ${t}`, quantity: 0, pricePaisa: 0, details: { code: `E-${t}`, department: 'Derma', note: 'old' } }, newKey());
+    const made = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Cannula ${t}`, quantity: 0, pricePaisa: 0, details: { note: 'old' } }, newKey());
     const id = made.body.itemId as string;
-    const edit = await rec.patch(`/api/reception/stock/${id}`, { name: `Cannula 25G ${t}`, unit: 'piece', minQty: 3, details: { department: 'Aesthetics', packSize: 20, sterile: true, note: null } });
+    const edit = await rec.patch(`/api/reception/stock/${id}`, { name: `Cannula 25G ${t}`, unit: 'piece', minQty: 3, details: { procedureUse: 'PRP', packSize: 20, note: null } });
     expect(edit.status, JSON.stringify(edit.body)).toBe(200);
-    expect(await prisma.stockItem.findUniqueOrThrow({ where: { id } })).toMatchObject({ name: `Cannula 25G ${t}`, code: `E-${t}`, department: 'Aesthetics', packSize: 20, sterile: true, note: null, minQty: 3 });
+    expect(await prisma.stockItem.findUniqueOrThrow({ where: { id } })).toMatchObject({ name: `Cannula 25G ${t}`, code: expect.stringMatching(/^P-\d{4,}$/), procedureUse: 'PRP', packSize: 20, note: null, minQty: 3 });
 
     expect((await rec.patch(`/api/reception/stock/${id}`, { active: false })).status).toBe(200);
     expect((await prisma.stockItem.findUniqueOrThrow({ where: { id } })).active).toBe(false);

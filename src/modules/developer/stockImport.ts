@@ -4,6 +4,7 @@ import { ValidationError } from '../../lib/errors';
 import { sha256 } from '../../lib/misc';
 import { clinicDateStr, dateOnly } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
+import { nextItemCodes } from '../../services/stock';
 import { PHARMACY_COLUMNS, PROCEDURE_COLUMNS, SERVICE_COLUMNS, parsePharmacyCsv, parseProcedureCsv, parseServiceCsv, type ImportKind, type RowIssue } from './stockImportParse';
 
 /**
@@ -58,53 +59,31 @@ async function importProcedure(actor: Actor, input: { csv: string; fileName?: st
 
   // One product per name: the same supply listed under several procedures becomes one stock item whose
   // "Procedure / Use" lists all of them.
+  // The file's Item ID column is ignored: Item IDs come from the app's one sequence (D-069).
   const merged = new Map<string, (typeof parsed.rows)[number]>();
-  const codeOwner = new Map<string, string>();
   for (const r of parsed.rows) {
-    if (r.code) {
-      const owner = codeOwner.get(key(r.code));
-      if (owner && owner !== key(r.name)) {
-        errors.push({ row: r.row, message: `${r.name}: Item ID "${r.code}" pehle kisi aur product ka hai (file mein).` });
-        continue;
-      }
-      codeOwner.set(key(r.code), key(r.name));
-    }
     const m = merged.get(key(r.name));
     if (!m) merged.set(key(r.name), { ...r });
-    else {
-      m.procedureUse = mergeUses(m.procedureUse, r.procedureUse);
-      m.code ??= r.code;
-      if (r.code && m.code && key(r.code) !== key(m.code)) warnings.push({ row: r.row, message: `${r.name}: doosra Item ID "${r.code}" — ek hi product hai, "${m.code}" rakha gaya.` });
-    }
+    else m.procedureUse = mergeUses(m.procedureUse, r.procedureUse);
   }
   const rows = [...merged.values()];
-  const existing = rows.length
-    ? await prisma.stockItem.findMany({ where: { OR: [{ name: { in: rows.map((r) => r.name) } }, { code: { in: rows.flatMap((r) => (r.code ? [r.code] : [])) } }] } })
-    : [];
+  const existing = rows.length ? await prisma.stockItem.findMany({ where: { name: { in: rows.map((r) => r.name) } } }) : [];
   const byName = new Map(existing.map((i) => [key(i.name), i]));
-  const byCode = new Map(existing.filter((i) => i.code).map((i) => [key(i.code!), i]));
 
   const creates: Prisma.StockItemCreateManyInput[] = [];
   const updates: { before: StockItem; data: Prisma.StockItemUpdateInput }[] = [];
   const preview: ImportResult['preview'] = [];
   let same = 0;
   for (const r of rows) {
-    const named = byName.get(key(r.name));
-    const coded = r.code ? byCode.get(key(r.code)) : undefined;
-    const match = coded ?? named;
+    const match = byName.get(key(r.name));
     if (match?.kind === 'PHARMACY') {
       errors.push({ row: r.row, message: `${r.name}: yeh naam Pharmacy product ka hai — procedure mein nahi aa sakta.` });
-      continue;
-    }
-    if (coded && named && coded.id !== named.id) {
-      errors.push({ row: r.row, message: `${r.name}: Item ID "${r.code}" "${coded.name}" ka hai, aur yeh naam doosre product ka.` });
       continue;
     }
     if (!match) {
       creates.push({
         name: r.name,
         kind: 'PROCEDURE',
-        code: r.code,
         category: r.category ?? 'Procedure',
         department: r.department,
         procedureUse: r.procedureUse,
@@ -116,12 +95,11 @@ async function importProcedure(actor: Actor, input: { csv: string; fileName?: st
         note: r.note,
         minQty: 0,
       });
-      preview.push({ row: r.row, name: r.name, detail: [r.code, r.category, r.unit].filter(Boolean).join(' · '), action: 'NEW' });
+      preview.push({ row: r.row, name: r.name, detail: [r.category, r.unit].filter(Boolean).join(' · '), action: 'NEW' });
       continue;
     }
     const want: Prisma.StockItemUpdateInput = {
       ...(r.name !== match.name ? { name: r.name } : {}),
-      ...(r.code && !match.code ? { code: r.code } : {}),
       ...(r.category && r.category !== match.category ? { category: r.category } : {}),
       ...(r.department && r.department !== match.department ? { department: r.department } : {}),
       ...(r.unit && r.unit !== match.baseUnit ? { baseUnit: r.unit } : {}),
@@ -157,7 +135,10 @@ async function importProcedure(actor: Actor, input: { csv: string; fileName?: st
   if (input.dryRun || (!creates.length && !updates.length)) return result;
 
   await prisma.$transaction(async (tx) => {
-    if (creates.length) await tx.stockItem.createMany({ data: creates, skipDuplicates: true });
+    if (creates.length) {
+      const codes = await nextItemCodes(tx, creates.length);
+      await tx.stockItem.createMany({ data: creates.map((c, i) => ({ ...c, code: codes[i] })), skipDuplicates: true });
+    }
     await audit(tx, actor, {
       action: 'STOCK_CSV_IMPORTED',
       recordType: 'StockItem',

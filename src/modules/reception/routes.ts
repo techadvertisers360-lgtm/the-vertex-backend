@@ -185,14 +185,8 @@ receptionRouter.post(
         costPaisa: paisa.optional(),
         details: z
           .object({
-            code: z.string().trim().max(64).optional(),
-            category: z.string().trim().max(120).optional(),
-            department: z.string().trim().max(120).optional(),
             procedureUse: z.string().trim().max(2000).optional(),
-            packUnit: z.string().trim().max(40).optional(),
             packSize: z.number().int().min(1).max(1_000_000).optional(),
-            itemType: z.string().trim().max(120).optional(),
-            sterile: z.boolean().optional(),
             note: z.string().trim().max(2000).optional(),
           })
           .optional(),
@@ -225,14 +219,8 @@ receptionRouter.patch(
         unit: z.string().trim().max(40).optional(),
         details: z
           .object({
-            code: z.string().trim().max(64).nullable().optional(),
-            category: z.string().trim().max(120).nullable().optional(),
-            department: z.string().trim().max(120).nullable().optional(),
             procedureUse: z.string().trim().max(2000).nullable().optional(),
-            packUnit: z.string().trim().max(40).nullable().optional(),
             packSize: z.number().int().min(1).max(1_000_000).nullable().optional(),
-            itemType: z.string().trim().max(120).nullable().optional(),
-            sterile: z.boolean().nullable().optional(),
             note: z.string().trim().max(2000).nullable().optional(),
           })
           .optional(),
