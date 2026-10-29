@@ -186,6 +186,20 @@ describe('reschedule & cancel (spec §6)', () => {
   });
 });
 
+describe('D-073 — patient seen before the booked time', () => {
+  it('a consultation sent to Reception before its start frees that time for the Doctor and the room', async () => {
+    await freeRoomsOnly();
+    const doctor = await doctorWithHours();
+    const [p1, p2] = [await patient(), await patient()];
+    const first = await bookAppointment(actor, req(doctor.id, p1.id, at('20:30')));
+    await expect(bookAppointment(actor, req(doctor.id, p2.id, at('20:30')))).rejects.toBeInstanceOf(SlotUnavailableError);
+    // came early: checked in and seen at 20:15, sent to Reception at 20:20
+    await prisma.appointment.update({ where: { id: first.appointment.id }, data: { status: 'RECEPTION', checkedInAt: at('20:15'), sentToReceptionAt: at('20:20') } });
+    const second = await bookAppointment(actor, req(doctor.id, p2.id, at('20:30')));
+    expect(second.appointment.status).toBe('CONFIRMED');
+  });
+});
+
 describe('scheduling read API', () => {
   it('slots endpoint hides leave dates and offers next available', async () => {
     const doctor = await doctorWithHours();

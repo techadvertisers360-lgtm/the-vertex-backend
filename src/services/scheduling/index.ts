@@ -104,7 +104,7 @@ export async function loadEngineData(db: Tx | typeof prisma, o: LoadOptions): Pr
       OR: [{ status: 'ACTIVE', startAt: { lt: rangeEnd }, endAt: { gt: rangeStart } }, { status: 'AWAITING_CLEAN' }],
       ...(exclude.length ? { NOT: { appointmentId: { in: exclude } } } : {}),
     },
-    include: { appointment: { select: { status: true, treatmentPlanItemId: true } } },
+    include: { appointment: { select: { status: true, type: true, treatmentPlanItemId: true, sentToReceptionAt: true, doneAt: true } } },
   });
 
   const dayMap = new Map<string, ReturnType<typeof buildDoctorDay>>();
@@ -123,29 +123,37 @@ export async function loadEngineData(db: Tx | typeof prisma, o: LoadOptions): Pr
   }
 
   const overrunEnd = ceilToStep(addMinutes(now, 1), config.slotStepMin);
-  const doctorBusy = appts.map((a) => {
-    let end = a.endAt;
-    // Consultation finished early (sent to Reception / done) frees the Doctor from that moment.
-    const finishedAt = a.sentToReceptionAt ?? a.doneAt;
-    if (finishedAt && finishedAt < end && finishedAt > a.startAt) end = finishedAt;
-    // In-progress visit running past its scheduled end keeps the Doctor busy until now.
-    if ((a.status === 'WITH_DOCTOR' || a.status === 'PROCEDURE') && end < now) end = overrunEnd;
-    return { id: a.id, start: a.startAt, end, type: a.type, source: a.treatmentPlanItemId ? ('planned_procedure' as const) : ('appointment' as const) };
-  });
+  const doctorBusy = appts
+    .map((a) => {
+      let end = a.endAt;
+      // Consultation finished early (sent to Reception / done) frees the Doctor from that moment — and entirely when
+      // the patient came early and was seen before the booked start (D-073).
+      const finishedAt = a.sentToReceptionAt ?? a.doneAt;
+      if (finishedAt && finishedAt < end) end = finishedAt > a.startAt ? finishedAt : a.startAt;
+      // In-progress visit running past its scheduled end keeps the Doctor busy until now.
+      if ((a.status === 'WITH_DOCTOR' || a.status === 'PROCEDURE') && end < now) end = overrunEnd;
+      return { id: a.id, start: a.startAt, end, type: a.type, source: a.treatmentPlanItemId ? ('planned_procedure' as const) : ('appointment' as const) };
+    })
+    .filter((b) => b.end > b.start);
 
-  const roomBusy = reservations.map((r) => {
-    let end = r.endAt;
-    let source: 'appointment' | 'planned_procedure' | 'awaiting_clean' = r.appointment?.treatmentPlanItemId ? 'planned_procedure' : 'appointment';
-    if (r.status === 'AWAITING_CLEAN') {
-      // Room stays occupied until clean evidence; assume at least the cleaning SLA from now.
-      const minEnd = addMinutes(now, cleanMin);
-      if (end < minEnd) end = minEnd;
-      source = 'awaiting_clean';
-    } else if (r.appointment && (r.appointment.status === 'WITH_DOCTOR' || r.appointment.status === 'PROCEDURE') && end < now) {
-      end = overrunEnd;
-    }
-    return { roomId: r.roomId, start: r.startAt, end, source, refId: r.appointmentId ?? r.procedureTaskId ?? r.id };
-  });
+  const roomBusy = reservations
+    .map((r) => {
+      let end = r.endAt;
+      // A finished consultation frees its room from that moment, like the Doctor (D-073). Procedure rooms wait for cleaning.
+      const finishedAt = r.status === 'ACTIVE' && r.appointment?.type === 'CONSULTATION' ? (r.appointment.sentToReceptionAt ?? r.appointment.doneAt) : null;
+      if (finishedAt && finishedAt < end) end = finishedAt > r.startAt ? finishedAt : r.startAt;
+      let source: 'appointment' | 'planned_procedure' | 'awaiting_clean' = r.appointment?.treatmentPlanItemId ? 'planned_procedure' : 'appointment';
+      if (r.status === 'AWAITING_CLEAN') {
+        // Room stays occupied until clean evidence; assume at least the cleaning SLA from now.
+        const minEnd = addMinutes(now, cleanMin);
+        if (end < minEnd) end = minEnd;
+        source = 'awaiting_clean';
+      } else if (r.appointment && (r.appointment.status === 'WITH_DOCTOR' || r.appointment.status === 'PROCEDURE') && end < now) {
+        end = overrunEnd;
+      }
+      return { roomId: r.roomId, start: r.startAt, end, source, refId: r.appointmentId ?? r.procedureTaskId ?? r.id };
+    })
+    .filter((b) => b.end > b.start);
 
   return {
     now,
