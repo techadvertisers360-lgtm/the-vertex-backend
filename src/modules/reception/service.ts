@@ -281,22 +281,25 @@ export async function cancel(actor: Actor, appointmentId: string, reason: string
 // ───────────── Check-in & vitals (spec §9, §20) ─────────────
 
 export async function checkIn(actor: Actor, appointmentId: string) {
+  return prisma.$transaction(async (tx) => checkInTx(tx, actor, appointmentId));
+}
+
+/** Check-in inside the caller's transaction (also used by the walk-in desk, D-075). */
+export async function checkInTx(tx: Tx, actor: Actor, appointmentId: string) {
   const now = new Date();
-  return prisma.$transaction(async (tx) => {
-    const a = await tx.appointment.findUnique({ where: { id: appointmentId }, include: { patient: { select: { name: true } } } });
-    if (!a) throw new NotFoundError('Appointment');
-    if (clinicDateStr(a.startAt) !== clinicDateStr(now)) {
-      throw new ConflictError('NOT_TODAY', `Yeh appointment ${formatClinic(a.startAt, 'dd LLL')} ki hai — sirf usi din check-in ho sakta hai. Reschedule request bhejein.`);
-    }
-    await transitionAppointment(tx, actor, a, 'CHECKED_IN', { data: { checkedInAt: now, checkedInById: actor.id } });
-    const doctorNotice = { recordType: 'Appointment', recordId: a.id, sender: actor, actionLabel: 'Open queue' };
-    await notifyUsers(tx, [a.doctorId], { ...doctorNotice, type: 'PATIENT_WAITING', subject: `Patient waiting: ${a.patient.name}`, body: `Arrived ${formatClinic(now, 'h:mm a')} · appointment ${formatClinic(a.startAt, 'h:mm a')}`, dedupeKey: `checkin:${a.id}:doctor` });
-    if (a.leadMemberId) {
-      await notifyUsers(tx, [a.leadMemberId], { ...doctorNotice, actionLabel: 'Open appointment', type: 'PATIENT_CHECKED_IN', subject: `Patient checked in: ${a.patient.name}`, body: formatClinic(now), dedupeKey: `checkin:${a.id}:lead` });
-    }
-    await journeyChanged(tx, { ...a, status: 'CHECKED_IN' });
-    return tx.appointment.findUniqueOrThrow({ where: { id: a.id } });
-  });
+  const a = await tx.appointment.findUnique({ where: { id: appointmentId }, include: { patient: { select: { name: true } } } });
+  if (!a) throw new NotFoundError('Appointment');
+  if (clinicDateStr(a.startAt) !== clinicDateStr(now)) {
+    throw new ConflictError('NOT_TODAY', `Yeh appointment ${formatClinic(a.startAt, 'dd LLL')} ki hai — sirf usi din check-in ho sakta hai. Reschedule request bhejein.`);
+  }
+  await transitionAppointment(tx, actor, a, 'CHECKED_IN', { data: { checkedInAt: now, checkedInById: actor.id } });
+  const doctorNotice = { recordType: 'Appointment', recordId: a.id, sender: actor, actionLabel: 'Open queue' };
+  await notifyUsers(tx, [a.doctorId], { ...doctorNotice, type: 'PATIENT_WAITING', subject: `Patient waiting: ${a.patient.name}`, body: `Arrived ${formatClinic(now, 'h:mm a')} · appointment ${formatClinic(a.startAt, 'h:mm a')}`, dedupeKey: `checkin:${a.id}:doctor` });
+  if (a.leadMemberId) {
+    await notifyUsers(tx, [a.leadMemberId], { ...doctorNotice, actionLabel: 'Open appointment', type: 'PATIENT_CHECKED_IN', subject: `Patient checked in: ${a.patient.name}`, body: formatClinic(now), dedupeKey: `checkin:${a.id}:lead` });
+  }
+  await journeyChanged(tx, { ...a, status: 'CHECKED_IN' });
+  return tx.appointment.findUniqueOrThrow({ where: { id: a.id } });
 }
 
 export interface VitalsInput {

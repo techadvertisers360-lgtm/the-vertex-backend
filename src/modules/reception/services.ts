@@ -12,7 +12,7 @@ const clean = (v: string | null | undefined) => (v === undefined ? undefined : v
 
 export async function list() {
   const items = await prisma.service.findMany({
-    select: { id: true, name: true, type: true, category: true, source: true, note: true, active: true },
+    select: { id: true, name: true, type: true, category: true, source: true, note: true, active: true, defaultPricePaisa: true },
     orderBy: [{ active: 'desc' }, { category: 'asc' }, { name: 'asc' }],
   });
   return { items };

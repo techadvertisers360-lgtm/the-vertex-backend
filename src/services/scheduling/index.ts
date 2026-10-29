@@ -130,8 +130,10 @@ export async function loadEngineData(db: Tx | typeof prisma, o: LoadOptions): Pr
       // the patient came early and was seen before the booked start (D-073).
       const finishedAt = a.sentToReceptionAt ?? a.doneAt;
       if (finishedAt && finishedAt < end) end = finishedAt > a.startAt ? finishedAt : a.startAt;
-      // In-progress visit running past its scheduled end keeps the Doctor busy until now.
-      if ((a.status === 'WITH_DOCTOR' || a.status === 'PROCEDURE') && end < now) end = overrunEnd;
+      // In-progress visit running past its scheduled end keeps the Doctor busy until now — not a walk-in procedure the
+      // Doctor never saw (sent to Reception at its start, D-075), which only the Assistant performs.
+      const neverSeen = !!finishedAt && finishedAt <= a.startAt;
+      if ((a.status === 'WITH_DOCTOR' || a.status === 'PROCEDURE') && end < now && !neverSeen) end = overrunEnd;
       return { id: a.id, start: a.startAt, end, type: a.type, source: a.treatmentPlanItemId ? ('planned_procedure' as const) : ('appointment' as const) };
     })
     .filter((b) => b.end > b.start);

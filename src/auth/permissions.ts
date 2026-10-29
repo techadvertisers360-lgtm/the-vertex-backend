@@ -209,6 +209,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   ],
   RECEPTIONIST: [
     { key: 'dashboard', label: 'Dashboard', path: '/reception', permission: 'reception:checkin' },
+    { key: 'walk-in', label: 'Walk-in / Create Invoice', path: '/reception/walk-in', permission: 'reception:checkin' },
     { key: 'patients', label: 'Patients', path: '/reception/patients', permission: 'patients:search' },
     { key: 'tracker', label: 'Active Tracker', path: '/reception/tracker', permission: 'reception:checkin' },
     { key: 'procedures', label: 'Procedures', path: '/reception/procedures', permission: 'reception:assign_procedure' },

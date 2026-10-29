@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AppointmentStatus, AppointmentType, PaymentMethod } from '@prisma/client';
 import { idParam, route } from '../../middleware/route';
 import * as svc from './service';
+import { walkIn } from './walkIn';
 import * as pharmacy from './pharmacy';
 import * as rstock from './stock';
 import * as services from './services';
@@ -82,6 +83,26 @@ receptionRouter.post(
   route({ permission: 'reception:checkin', params: idParam, body: z.object({ reason: z.string().min(2).max(500) }) }, async ({ actor, params, body }) => svc.cancel(actor, params.id, body.reason)),
 );
 
+// Walk-in desk (D-075): consultation / procedure with the Doctor, or procedure by an Assistant
+receptionRouter.post(
+  '/walk-in',
+  route(
+    {
+      permission: 'reception:checkin',
+      idempotent: true,
+      status: 201,
+      body: z.object({
+        patientId: z.string().min(1),
+        intent: z.enum(['CONSULTATION', 'PROCEDURE_DOCTOR', 'PROCEDURE_ASSISTANT']),
+        doctorId: z.string().min(1),
+        serviceId: z.string().optional(),
+        pricePaisa: z.number().int().min(0).max(100_000_000_00).optional(),
+        reason: z.string().max(1000).optional(),
+      }),
+    },
+    async ({ actor, body, idempotencyKey }) => walkIn(actor, body, idempotencyKey!),
+  ),
+);
 receptionRouter.post('/appointments/:id/check-in', route({ permission: 'reception:checkin', params: idParam }, async ({ actor, params }) => svc.checkIn(actor, params.id)));
 
 receptionRouter.post(
