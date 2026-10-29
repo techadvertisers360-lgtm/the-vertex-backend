@@ -106,6 +106,28 @@ leadRouter.post(
   ),
 );
 
+// Connection booking (D-071): the member's own contact, no lead sheet
+leadRouter.post(
+  '/connection-book',
+  route(
+    {
+      permission: 'appointments:book',
+      idempotent: true,
+      status: 201,
+      body: z.object({
+        patient: patientInput.extend({ phone: z.string().min(7).max(20) }),
+        doctorId: z.string().min(1),
+        type: z.nativeEnum(AppointmentType),
+        serviceId: z.string().optional(),
+        reason: z.string().max(1000).optional(),
+        start: z.coerce.date(),
+        roomId: z.string().optional(),
+      }),
+    },
+    async ({ actor, body, idempotencyKey }) => svc.bookConnection(actor, body, idempotencyKey!),
+  ),
+);
+
 leadRouter.get(
   '/appointments',
   route({ permission: 'appointments:read', query: z.object({ bucket: z.enum(['today', 'after2', 'after7', 'total']).default('today') }) }, async ({ actor, query }) =>

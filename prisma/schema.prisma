@@ -81,6 +81,8 @@ enum AppointmentSource {
   RECEPTION
   MANAGER
   DOCTOR_PLAN
+  /// Lead Team member books someone from their own contacts, no lead sheet (D-071).
+  CONNECTION
 }
 
 enum RoomKind {

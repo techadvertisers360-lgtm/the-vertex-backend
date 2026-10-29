@@ -267,31 +267,38 @@ export interface LeadBookInput {
  * attributed immutably to the member, sheet/campaign and lead (spec §8), the lead becomes BOOKED, and Patient,
  * Doctor and Reception receive the same booking details (spec §20).
  */
+/** The booked patient: an existing one registered on this phone number, or a new one. */
+async function resolvePatient(tx: Tx, actor: Actor, patient: LeadBookInput['patient'], fallback: { name?: string; phone?: string }): Promise<string> {
+  const raw = patient.phone ?? fallback.phone;
+  if (!raw) throw new ValidationError('Patient ka phone number likhein.');
+  if (patient.existingPatientId) {
+    // The member may only attach a patient registered on the lead's (or entered) phone number.
+    const phone = requirePhone(raw);
+    const onPhone = await patientsOnPhone(tx, phone);
+    if (!onPhone.some((p) => p.id === patient.existingPatientId)) deny('Patient', patient.existingPatientId, 'lead:patient_matches_phone');
+    return patient.existingPatientId;
+  }
+  const name = patient.name ?? fallback.name;
+  if (!name || name.trim().length < 2) throw new ValidationError('Patient ka naam likhein.');
+  const p = await createPatient(tx, actor, {
+    name,
+    phone: raw,
+    contactConsent: patient.contactConsent ?? false,
+    whatsappConsent: patient.whatsappConsent ?? false,
+    ageYears: patient.ageYears,
+    gender: patient.gender,
+    confirmSharedPhone: patient.confirmSharedPhone,
+  });
+  return p.id;
+}
+
 export async function bookFromLead(actor: Actor, leadId: string, input: LeadBookInput, idempotencyKey: string) {
   return prisma.$transaction(async (tx) => {
     const lead = await leadInScope(actor, leadId, tx);
     const replay = await tx.appointment.findUnique({ where: { idempotencyKey: `lead:${idempotencyKey}` } });
     if (replay) return { appointment: replay, replayed: true };
 
-    let patientId: string;
-    if (input.patient.existingPatientId) {
-      // The member may only attach a patient registered on the lead's (or entered) phone number.
-      const phone = requirePhone(input.patient.phone ?? lead.phone);
-      const onPhone = await patientsOnPhone(tx, phone);
-      if (!onPhone.some((p) => p.id === input.patient.existingPatientId)) deny('Patient', input.patient.existingPatientId, 'lead:patient_matches_phone');
-      patientId = input.patient.existingPatientId;
-    } else {
-      const p = await createPatient(tx, actor, {
-        name: input.patient.name ?? lead.name,
-        phone: input.patient.phone ?? lead.phone,
-        contactConsent: input.patient.contactConsent ?? false,
-        whatsappConsent: input.patient.whatsappConsent ?? false,
-        ageYears: input.patient.ageYears,
-        gender: input.patient.gender,
-        confirmSharedPhone: input.patient.confirmSharedPhone,
-      });
-      patientId = p.id;
-    }
+    const patientId = await resolvePatient(tx, actor, input.patient, { name: lead.name, phone: lead.phone });
 
     const { appointment } = await bookInTx(tx, actor, {
       patientId,
@@ -313,6 +320,35 @@ export async function bookFromLead(actor: Actor, leadId: string, input: LeadBook
     await tx.lead.update({ where: { id: leadId }, data: { status: 'BOOKED', outcome: 'BOOKED', nextContactAt: null } });
     await completeCallbacks(tx, leadId, now);
     await audit(tx, actor, { action: 'LEAD_BOOKED', recordType: 'Lead', recordId: leadId, before: { status: lead.status }, after: { status: 'BOOKED', appointmentId: appointment.id } });
+    await announceAppointment(tx, actor, appointment, 'confirmed');
+    return { appointment, replayed: false };
+  }, TX_OPTS);
+}
+
+/**
+ * Connection booking (D-071): a Lead Team member books someone from their own contacts — no lead or sheet. The
+ * same scheduling engine runs the final check; the booking is attributed to the member (shows in their
+ * appointments, which they can reschedule / cancel) with source CONNECTION, so it is not counted as a lead booking.
+ */
+export async function bookConnection(actor: Actor, input: LeadBookInput, idempotencyKey: string) {
+  if (!input.patient.phone) throw new ValidationError('Patient ka phone number likhein.');
+  return prisma.$transaction(async (tx) => {
+    const replay = await tx.appointment.findUnique({ where: { idempotencyKey: `conn:${idempotencyKey}` } });
+    if (replay) return { appointment: replay, replayed: true };
+    const patientId = await resolvePatient(tx, actor, input.patient, {});
+    const { appointment } = await bookInTx(tx, actor, {
+      patientId,
+      doctorId: input.doctorId,
+      type: input.type,
+      serviceId: input.serviceId ?? null,
+      reason: input.reason ?? null,
+      start: input.start,
+      roomId: input.roomId,
+      source: 'CONNECTION',
+      leadMemberId: actor.id,
+      idempotencyKey: `conn:${idempotencyKey}`,
+    });
+    await audit(tx, actor, { action: 'CONNECTION_BOOKED', recordType: 'Appointment', recordId: appointment.id, after: { patientId, doctorId: input.doctorId, startAt: appointment.startAt } });
     await announceAppointment(tx, actor, appointment, 'confirmed');
     return { appointment, replayed: false };
   }, TX_OPTS);

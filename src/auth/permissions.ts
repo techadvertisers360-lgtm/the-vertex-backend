@@ -203,6 +203,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'leads', label: 'Leads', path: '/lead/leads', permission: 'leads:own' },
     { key: 'callbacks', label: 'Reminder Queue', path: '/lead/callbacks', permission: 'leads:own' },
     { key: 'appointments', label: 'Appointments', path: '/lead/appointments', permission: 'appointments:read' },
+    { key: 'connection', label: 'Connection Booking', path: '/lead/connection', permission: 'appointments:book' },
     { key: 'requests', label: 'Requests', path: '/lead/requests', permission: 'requests:own' },
     { key: 'performance', label: 'My Performance', path: '/lead/performance', permission: 'leads:own' },
   ],

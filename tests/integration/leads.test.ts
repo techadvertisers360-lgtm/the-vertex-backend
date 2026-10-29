@@ -204,6 +204,32 @@ describe('§25 #3 — Lead books an available consult', () => {
   });
 });
 
+describe('D-071 — connection booking', () => {
+  it('member books an own contact without a lead; it shows in their appointments; a busy slot is refused; other roles denied', async () => {
+    await freeRoomsFrom(at('00:00'));
+    const m = await leadMember();
+    const doctor = await doctorWithHours();
+    const phone = uniquePhone();
+    const body = { patient: { name: 'Connection Patient', phone, whatsappConsent: true, contactConsent: true }, doctorId: doctor.id, type: 'CONSULTATION', start: at('11:00').toISOString() };
+    const key = newKey();
+    const res = await m.api.post('/api/lead/connection-book', body, key);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.appointment).toMatchObject({ status: 'CONFIRMED', source: 'CONNECTION', leadId: null, sheetId: null, leadMemberId: m.user.id, doctorId: doctor.id });
+    expect((await m.api.post('/api/lead/connection-book', body, key)).body.appointment.id).toBe(res.body.appointment.id);
+    expect(await lastAudit('CONNECTION_BOOKED', res.body.appointment.id)).not.toBeNull();
+    const mine = await listMyAppointments({ id: m.user.id, role: 'LEAD_MEMBER' } as never, 'total');
+    expect(JSON.stringify(mine)).toContain(res.body.appointment.id);
+
+    // same Doctor, same time → refused with suggestions
+    const busy = await m.api.post('/api/lead/connection-book', { ...body, patient: { ...body.patient, phone: uniquePhone(), name: 'Other Person' } }, newKey());
+    expect(busy.status).toBe(409);
+    // phone is required
+    expect((await m.api.post('/api/lead/connection-book', { ...body, patient: { name: 'No Phone' } }, newKey())).status).toBe(400);
+    const office = call((await agentFor('OFFICE_BOY')).agent);
+    expect((await office.post('/api/lead/connection-book', body, newKey())).status).toBe(403);
+  });
+});
+
 describe('shared phone numbers (D-010, clinic-confirmed)', () => {
   it('duplicate warning lists existing patients; staff must confirm; confirmation is audited', async () => {
     await freeRoomsFrom(at('00:00'));
