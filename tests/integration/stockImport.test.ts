@@ -104,7 +104,8 @@ describe('D-055 — stock CSV import', () => {
     // D-069 — a typed Item ID is ignored; the next product gets the next number
     const next = await rec.post('/api/reception/stock', { kind: 'PROCEDURE', name: `Needle B ${t}`, quantity: 0, pricePaisa: 0, details: { code: 'MINE-1' } }, newKey());
     expect(next.status).toBe(201);
-    const [a, b] = await Promise.all([`Needle ${t}`, `Needle B ${t}`].map((name) => prisma.stockItem.findUniqueOrThrow({ where: { name } })));
+    const a = await prisma.stockItem.findUniqueOrThrow({ where: { name: `Needle ${t}` } });
+    const b = await prisma.stockItem.findUniqueOrThrow({ where: { name: `Needle B ${t}` } });
     expect(Number(b.code!.slice(2))).toBe(Number(a.code!.slice(2)) + 1);
 
     const add = await rec.post('/api/reception/stock', { kind: 'PHARMACY', name: `Serum ${t}`, quantity: 4, pricePaisa: 250_000, costPaisa: 150_000, lotNo: `LOT-${t}`, distributor: `Dist ${t}`, unit: 'bottle', expiryDate: '2031-01-31' }, newKey());
