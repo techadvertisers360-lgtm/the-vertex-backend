@@ -7,7 +7,7 @@ import { env } from '../../config/env';
 import { AppError } from '../../lib/errors';
 import { logger } from '../../lib/misc';
 import { authenticate, requireOnSite } from '../../middleware/auth';
-import { authorizeUpload, recordUpload, UPLOAD_RULES } from '../../services/files';
+import { authorizeUpload, recordUpload, UPLOAD_RULES, type RouteRule } from '../../services/files';
 
 const f = createUploadthing();
 const targetInput = z.object({ recordType: z.string().min(1).max(40), recordId: z.string().min(1).max(64) });
@@ -18,9 +18,9 @@ function buildRoute(route: UploadRoute) {
   // Private ACL only when the plan supports it (UPLOADTHING_PRIVATE_FILES=true). Otherwise no per-route ACL is sent
   // and the app default applies; the file URL is still never stored or exposed for clinical routes (D-030).
   const acl = rule.isPrivate && env.privateFiles ? ({ acl: 'private' } as const) : {};
-  const config: Record<string, { maxFileSize: typeof rule.maxFileSize; maxFileCount: number; acl?: 'private' }> = {};
+  const config: Record<string, { maxFileSize: RouteRule['maxFileSize'] | '64MB'; maxFileCount: number; acl?: 'private' }> = {};
   for (const kind of rule.kinds) {
-    config[kind] = { maxFileSize: rule.maxFileSize, maxFileCount: 4, ...acl };
+    config[kind] = { maxFileSize: kind === 'video' ? (rule.videoMaxFileSize ?? rule.maxFileSize) : rule.maxFileSize, maxFileCount: 10, ...acl };
   }
   return f(config)
     .input(targetInput)

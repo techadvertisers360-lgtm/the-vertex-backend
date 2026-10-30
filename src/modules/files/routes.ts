@@ -51,9 +51,17 @@ filesRouter.get('/:id/content', async (req, res) => {
   if (!att) throw new NotFoundError('File');
   await authorizeRead(actor, att);
   if (att.fileKey.startsWith('dev_')) throw new AppError(404, 'DEV_STUB_FILE', 'Dev stub attachment — file bytes store nahi hue.');
-  const upstream = await fetch(await signedUrlFor(att.fileKey, 60));
+  // Byte ranges are passed through so videos can play and seek (D-082); only the first chunk is audited.
+  const range = typeof req.headers.range === 'string' && /^bytes=\d*-\d*$/.test(req.headers.range) ? req.headers.range : undefined;
+  const upstream = await fetch(await signedUrlFor(att.fileKey, 60), range ? { headers: { Range: range } } : undefined);
   if (!upstream.ok || !upstream.body) throw new AppError(502, 'FILE_FETCH_FAILED', 'File abhi load nahi ho saki. Dobara koshish karein.');
-  await audit(prisma, actor, { action: 'FILE_ACCESSED', recordType: att.recordType, recordId: att.recordId, after: { attachmentId: att.id } });
+  if (!range || range.startsWith('bytes=0-')) {
+    await audit(prisma, actor, { action: 'FILE_ACCESSED', recordType: att.recordType, recordId: att.recordId, after: { attachmentId: att.id } });
+  }
+  res.status(upstream.status === 206 ? 206 : 200);
+  const contentRange = upstream.headers.get('content-range');
+  if (contentRange) res.setHeader('Content-Range', contentRange);
+  res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Content-Type', att.mime);
   // ?download=1 saves the file instead of showing it (developer photo gallery, D-072)
   res.setHeader('Content-Disposition', `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${att.fileName.replace(/[^\w.\- ]/g, '_')}"`);
@@ -100,7 +108,7 @@ filesRouter.post(
         recordId: z.string().min(1).max(64),
         fileName: z.string().min(1).max(200),
         mime: z.string().min(1).max(100),
-        size: z.number().int().positive().max(16 * 1024 * 1024),
+        size: z.number().int().positive().max(64 * 1024 * 1024),
       }),
       status: 201,
     },

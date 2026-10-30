@@ -338,7 +338,7 @@ export async function myProcedures(actor: Actor) {
 export async function procedureDetail(actor: Actor, taskId: string) {
   const t = await assertAssignedProcedure(actor, taskId);
   const [view] = await decorateTasks([t]);
-  const uploads = await prisma.attachment.findMany({ where: { recordType: 'ProcedureTask', recordId: t.id }, select: { id: true, route: true, fileName: true, createdAt: true } });
+  const uploads = await prisma.attachment.findMany({ where: { recordType: 'ProcedureTask', recordId: t.id }, orderBy: { createdAt: 'asc' }, select: { id: true, route: true, fileName: true, mime: true, createdAt: true } });
   const used = await prisma.stockTransaction.findMany({ where: { procedureTaskId: t.id, type: 'USAGE' }, select: { itemId: true, quantity: true, item: { select: { name: true, baseUnit: true } } } });
   const autoMin = await getSetting('procedure.autoSendToReceptionMinutes');
   const autoSendAt = t.currentStep === 'SEND_TO_RECEPTION' && t.itemsUsedAt ? addMinutes(t.itemsUsedAt, autoMin) : null;
@@ -374,17 +374,28 @@ export async function recordConsent(actor: Actor, taskId: string, attachmentId: 
   });
 }
 
-/** Photos may be skipped only when the patient declines — the reason is stored (spec §4, §12). */
-export async function recordPhoto(actor: Actor, taskId: string, which: 'before' | 'after', input: { attachmentId?: string; skipReason?: string }) {
-  if (!input.attachmentId && !input.skipReason?.trim()) throw new ValidationError('Photo upload karein, ya patient ke inkar ki wajah likh kar Skip karein.');
+/**
+ * Photos may be skipped only when the patient declines — the reason is stored (spec §4, §12).
+ * Several photos and/or videos may be saved per step (D-082); the first is kept as the step's main attachment.
+ */
+export async function recordPhoto(actor: Actor, taskId: string, which: 'before' | 'after', input: { attachmentId?: string; attachmentIds?: string[]; skipReason?: string }) {
+  const ids = [...new Set([...(input.attachmentIds ?? []), ...(input.attachmentId ? [input.attachmentId] : [])])];
+  if (!ids.length && !input.skipReason?.trim()) throw new ValidationError('Photo upload karein, ya patient ke inkar ki wajah likh kar Skip karein.');
   return withTask(actor, taskId, async (tx, t) => {
-    if (input.attachmentId) await requireAttachment(tx, t.id, input.attachmentId, which === 'before' ? 'beforePhoto' : 'afterPhoto');
+    for (const id of ids) await requireAttachment(tx, t.id, id, which === 'before' ? 'beforePhoto' : 'afterPhoto');
+    const main = ids[0] ?? null;
     const data =
       which === 'before'
-        ? { beforePhotoAttachmentId: input.attachmentId ?? null, beforePhotoSkipped: !input.attachmentId, beforePhotoSkipReason: input.attachmentId ? null : input.skipReason!.trim() }
-        : { afterPhotoAttachmentId: input.attachmentId ?? null, afterPhotoSkipped: !input.attachmentId, afterPhotoSkipReason: input.attachmentId ? null : input.skipReason!.trim() };
+        ? { beforePhotoAttachmentId: main, beforePhotoSkipped: !main, beforePhotoSkipReason: main ? null : input.skipReason!.trim() }
+        : { afterPhotoAttachmentId: main, afterPhotoSkipped: !main, afterPhotoSkipReason: main ? null : input.skipReason!.trim() };
     const r = await advance(tx, t, which === 'before' ? 'BEFORE_PHOTO' : 'AFTER_PHOTO', data);
-    await audit(tx, actor, { action: input.attachmentId ? `${which.toUpperCase()}_PHOTO_UPLOADED` : `${which.toUpperCase()}_PHOTO_SKIPPED`, recordType: 'ProcedureTask', recordId: t.id, reason: input.skipReason });
+    await audit(tx, actor, {
+      action: main ? `${which.toUpperCase()}_PHOTO_UPLOADED` : `${which.toUpperCase()}_PHOTO_SKIPPED`,
+      recordType: 'ProcedureTask',
+      recordId: t.id,
+      after: main ? { attachmentIds: ids } : undefined,
+      reason: main ? undefined : input.skipReason,
+    });
     return r;
   });
 }

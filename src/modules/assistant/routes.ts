@@ -54,7 +54,7 @@ assistantRouter.post(
   '/procedures/:id/consent',
   route({ permission: 'assistant:tasks', params: idParam, body: z.object({ attachmentId: id }) }, async ({ actor, params, body }) => proc.recordConsent(actor, params.id, body.attachmentId)),
 );
-const photoBody = z.object({ attachmentId: id.optional(), skipReason: z.string().max(1000).optional() });
+const photoBody = z.object({ attachmentId: id.optional(), attachmentIds: z.array(id).max(30).optional(), skipReason: z.string().max(1000).optional() });
 assistantRouter.post('/procedures/:id/before-photo', route({ permission: 'assistant:tasks', params: idParam, body: photoBody }, async ({ actor, params, body }) => proc.recordPhoto(actor, params.id, 'before', body)));
 assistantRouter.post('/procedures/:id/start', route({ permission: 'assistant:tasks', params: idParam }, async ({ actor, params }) => proc.startProcedure(actor, params.id)));
 assistantRouter.post('/procedures/:id/finish', route({ permission: 'assistant:tasks', params: idParam }, async ({ actor, params }) => proc.finishProcedure(actor, params.id)));

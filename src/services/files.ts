@@ -14,14 +14,16 @@ export interface RouteRule {
   /** Record types this route may link to (besides PENDING). */
   recordTypes: string[];
   maxFileSize: '4MB' | '8MB' | '16MB';
-  kinds: ('image' | 'pdf')[];
+  kinds: ('image' | 'pdf' | 'video')[];
+  /** Size cap for video files when `kinds` includes video (D-082). */
+  videoMaxFileSize?: '64MB';
 }
 
 export const UPLOAD_RULES: Record<UploadRoute, RouteRule> = {
   consentForm: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
   prescriptionPhoto: { isPrivate: true, uploaders: ['RECEPTIONIST', 'MANAGER'], recordTypes: ['Invoice'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
-  beforePhoto: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image'] },
-  afterPhoto: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image'] },
+  beforePhoto: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image', 'video'], videoMaxFileSize: '64MB' },
+  afterPhoto: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image', 'video'], videoMaxFileSize: '64MB' },
   itemsUsedEvidence: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image'] },
   roomCleanPhoto: { isPrivate: true, uploaders: ['ASSISTANT'], recordTypes: ['ProcedureTask'], maxFileSize: '8MB', kinds: ['image'] },
   roomChecklistPhoto: { isPrivate: true, uploaders: ['ASSISTANT', 'OFFICE_BOY'], recordTypes: ['RoomAssignment', 'OfficeRound'], maxFileSize: '8MB', kinds: ['image'] },
