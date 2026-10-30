@@ -17,6 +17,32 @@ export const notFound: RequestHandler = (_req, res) => {
   res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Endpoint nahi mila.' } });
 };
 
+let lastDbBusyReport = 0;
+
+/** Prisma codes meaning "database full / unreachable right now" (pool timeout, too many connections, connect failures). */
+const DB_BUSY_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2037']);
+
+/** The database could not take the query right now — temporary, safe to retry later (pure; unit-tested). */
+export function isDbBusy(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientInitializationError) return true;
+  if (err instanceof Prisma.PrismaClientKnownRequestError && DB_BUSY_CODES.has(err.code)) return true;
+  return /Too many (database )?connections|Can't reach database server|Timed out fetching a new connection/i.test(String((err as Error)?.message ?? ''));
+}
+
+/**
+ * The endpoint for grouping alerts. Errors raised before a route matched (e.g. in auth) have no `req.route`, so ids
+ * in the path are replaced with `:id` — otherwise every file / record id became its own alert (pure; unit-tested).
+ */
+export function endpointKey(method: string, baseUrl: string, routePath: string | undefined, path: string): string {
+  if (routePath) return `${method} ${baseUrl}${routePath}`;
+  const clean = `${baseUrl}${path}`
+    .split('?')[0]!
+    .split('/')
+    .map((seg) => (/^(c[a-z0-9]{20,}|[0-9a-f]{8}-[0-9a-f-]{27}|\d+)$/i.test(seg) ? ':id' : seg))
+    .join('/');
+  return `${method} ${clean}`;
+}
+
 export const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   if (err instanceof ForbiddenError) {
     await auditDenied(req.actor ?? { id: null, role: null, displayName: 'anonymous', ip: req.ip }, err.denial, `${req.method} ${req.originalUrl}`);
@@ -43,9 +69,28 @@ export const errorHandler: ErrorRequestHandler = async (err, req, res, _next) =>
     res.status(400).json({ error: { code: 'BAD_JSON', message: 'Invalid JSON body.' } });
     return;
   }
+  const hour = Math.floor(Date.now() / 3_600_000);
+  if (isDbBusy(err)) {
+    // Too many connections / database unreachable: a temporary overload, not a bug in this endpoint. The browser
+    // retries reads; the developer gets one alert per hour for all endpoints together.
+    logger.warn({ err, requestId: req.requestId, path: req.originalUrl }, 'database busy');
+    // Reporting itself needs the database: try at most once a minute per instance so it does not add to the load.
+    if (Date.now() - lastDbBusyReport > 60_000) {
+      lastDbBusyReport = Date.now();
+      await reportIssue(req.actor ?? { id: null, role: null, displayName: 'Anonymous', ip: req.ip }, {
+        area: 'Database busy',
+        tried: endpointKey(req.method, req.baseUrl, req.route?.path, req.path),
+        reason: String((err as Error)?.message ?? err).replace(/mysql:\/\/\S+/g, 'mysql://***').slice(0, 1500),
+        context: { requestId: req.requestId, url: req.originalUrl.split('?')[0] },
+        dedupeKey: `devissue:dbbusy:${hour}`,
+      });
+    }
+    res.status(503).set('Retry-After', '2').json({ error: { code: 'DB_BUSY', message: 'Server abhi busy hai — thori der baad dobara koshish karein.', requestId: req.requestId } });
+    return;
+  }
   logger.error({ err, requestId: req.requestId, path: req.originalUrl }, 'unhandled error');
   // Unexpected failures reach the developer, naming who hit them (D-045). One notification per endpoint per hour.
-  const where = `${req.method} ${req.baseUrl}${req.route?.path ?? req.path}`;
+  const where = endpointKey(req.method, req.baseUrl, req.route?.path, req.path);
   const reason = String((err as Error)?.message ?? err)
     .replace(/mysql:\/\/\S+/g, 'mysql://***')
     .slice(0, 1500);
@@ -54,7 +99,7 @@ export const errorHandler: ErrorRequestHandler = async (err, req, res, _next) =>
     tried: where,
     reason,
     context: { requestId: req.requestId, url: req.originalUrl.split('?')[0] },
-    dedupeKey: `devissue:500:${where}:${Math.floor(Date.now() / 3_600_000)}`,
+    dedupeKey: `devissue:500:${where}:${hour}`,
   });
   res.status(500).json({ error: { code: 'INTERNAL', message: 'Server error. Dobara koshish karein.', requestId: req.requestId } });
 };

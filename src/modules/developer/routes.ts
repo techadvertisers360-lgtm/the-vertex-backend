@@ -142,7 +142,7 @@ developerRouter.get(
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         cursor: z.string().max(64).optional(),
-        limit: z.coerce.number().int().min(1).max(200).default(60),
+        limit: z.coerce.number().int().min(1).max(200).default(24),
       }),
     },
     async ({ query }) => listPhotos(query),
