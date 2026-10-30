@@ -7,10 +7,12 @@ let manager: ReturnType<typeof call>;
 let md: ReturnType<typeof call>;
 let patientId: string;
 let name: string;
+let managerId: string;
 
 beforeAll(async () => {
   const m = await agentFor('MANAGER');
   manager = call(m.agent);
+  managerId = m.user.id;
   md = call((await agentFor('MD')).agent);
   const doctor = await makeUser('DOCTOR');
   name = `Record Patient ${uid()}`;
@@ -45,5 +47,25 @@ describe('D-078 — patient records', () => {
       expect((await c.get('/api/patient-records')).status).toBe(403);
       expect((await c.get(`/api/patient-records/${patientId}`)).status).toBe(403);
     }
+  });
+
+  it('Manager corrects a wrong entry with a reason (audited); a phone used by someone else needs confirmation; Reception cannot', async () => {
+    expect((await manager.patch(`/api/patient-records/${patientId}`, { name: 'X Y', reason: '' })).status).toBe(400);
+    const ok = await manager.patch(`/api/patient-records/${patientId}`, { name: `${name} Khan`, ageYears: 41, gender: 'female', reason: 'Reception ne naam adhoora likha' });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ok.body).toMatchObject({ name: `${name} Khan`, ageYears: 41, gender: 'female' });
+    const ev = await prisma.auditEvent.findFirst({ where: { action: 'PATIENT_CORRECTED', recordId: patientId }, orderBy: { createdAt: 'desc' } });
+    expect(ev?.reason).toBe('Reception ne naam adhoora likha');
+
+    const other = await prisma.patient.create({ data: { name: 'Other Person', phone: normalizePhone(uniquePhone())!, createdById: managerId } });
+    const clash = await manager.patch(`/api/patient-records/${patientId}`, { phone: other.phone, reason: 'Number ghalat tha' });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error.code).toBe('DUPLICATE_PHONE');
+    const shared = await md.patch(`/api/patient-records/${patientId}`, { phone: other.phone, reason: 'Family ka number', confirmSharedPhone: true });
+    expect(shared.status, JSON.stringify(shared.body)).toBe(200);
+    expect(shared.body).toMatchObject({ phone: other.phone, phoneSlot: 1 });
+
+    const rec = call((await agentFor('RECEPTIONIST')).agent);
+    expect((await rec.patch(`/api/patient-records/${patientId}`, { name: 'Hack', reason: 'test' })).status).toBe(403);
   });
 });

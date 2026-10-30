@@ -1,15 +1,17 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
-import { NotFoundError } from '../../lib/errors';
+import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors';
 import { phoneSearchFragment } from '../../lib/phone';
 import { audit, type Actor } from '../../services/audit';
+import { patientsOnPhone, requirePhone } from './service';
 
 /**
  * Patient Records for Manager and MD (client 2026-10-30, D-078): every patient the clinic has seen, searchable, and one
  * patient's complete history A to Z — every visit (also cancelled / rescheduled), its timeline, vitals, treatment plan,
  * procedures (Assistant, room, consent, before/after photos, items used), invoice with payments, prescription,
- * feedback, follow-up and aftercare, plus pharmacy counter sales. View only; no product cost. Opening a record is
- * audited. Photos open through /api/files (scope-checked, audited).
+ * feedback, follow-up and aftercare, plus pharmacy counter sales. No product cost. Opening a record is audited.
+ * Photos open through /api/files (scope-checked, audited). Manager / MD may correct the patient's own details
+ * (name, phone, age, gender) with a reason; the history itself is never edited.
  */
 
 export async function listPatients(q: { q?: string; cursor?: string; limit: number }) {
@@ -330,4 +332,62 @@ export async function patientRecord(actor: Actor, patientId: string) {
     // Pharmacy counter sales and any invoice not tied to a visit.
     otherInvoices: invoices.filter((i) => !i.appointmentId || !apptIds.includes(i.appointmentId)).map(invoiceView),
   };
+}
+
+export interface PatientCorrection {
+  name?: string;
+  phone?: string;
+  ageYears?: number | null;
+  gender?: string | null;
+  reason: string;
+  /** The new number already belongs to another patient and this is a different person sharing it (D-010). */
+  confirmSharedPhone?: boolean;
+}
+
+/**
+ * Correct a wrong entry in the patient's details (client 2026-10-30, D-079). Only these fields; visits, plans,
+ * invoices and photos are never edited here. A reason is required; before / after go to the audit. A new phone
+ * already used by another patient needs the same shared-number confirmation as registration (D-010).
+ */
+export async function correctPatient(actor: Actor, patientId: string, input: PatientCorrection) {
+  const reason = input.reason.trim();
+  if (reason.length < 3) throw new ValidationError('Tabdeeli ki wajah likhein.');
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.patient.findUnique({ where: { id: patientId }, select: { id: true, name: true, phone: true, phoneSlot: true, ageYears: true, gender: true, mergedIntoId: true } });
+    if (!before) throw new NotFoundError('Patient');
+    if (before.mergedIntoId) throw new ConflictError('PATIENT_MERGED', 'Yeh record doosre patient mein merge ho chuka hai — us patient ko edit karein.');
+
+    const data: Prisma.PatientUpdateInput = {};
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (name.length < 2) throw new ValidationError('Patient ka naam zaroori hai.');
+      if (name !== before.name) data.name = name;
+    }
+    if (input.ageYears !== undefined && input.ageYears !== before.ageYears) data.ageYears = input.ageYears;
+    if (input.gender !== undefined && (input.gender || null) !== before.gender) data.gender = input.gender || null;
+    if (input.phone !== undefined) {
+      const phone = requirePhone(input.phone);
+      if (phone !== before.phone) {
+        const others = (await patientsOnPhone(tx, phone)).filter((p) => p.id !== patientId);
+        if (others.length && !input.confirmSharedPhone) {
+          throw new ConflictError('DUPLICATE_PHONE', 'Is phone number par pehle se patient mojood hai. Agar yeh alag shakhs hai to confirm karein.', { existing: others });
+        }
+        const max = await tx.patient.aggregate({ where: { phone }, _max: { phoneSlot: true } });
+        data.phone = phone;
+        data.phoneSlot = max._max.phoneSlot === null ? 0 : max._max.phoneSlot + 1;
+      }
+    }
+    if (!Object.keys(data).length) throw new ValidationError('Koi tabdeeli nahi ki.');
+
+    try {
+      const after = await tx.patient.update({ where: { id: patientId }, data, select: { id: true, name: true, phone: true, phoneSlot: true, ageYears: true, gender: true } });
+      await audit(tx, actor, { action: 'PATIENT_CORRECTED', recordType: 'Patient', recordId: patientId, before, after, reason });
+      return after;
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictError('DUPLICATE_PHONE', 'Is phone number par abhi patient ban gaya. Dobara koshish karein.');
+      }
+      throw e;
+    }
+  });
 }
