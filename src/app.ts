@@ -26,6 +26,7 @@ import { webhooksRouter } from './modules/messaging/webhooks';
 import { messagesRouter } from './modules/messaging/routes';
 import { cronRouter, realtimeRouter } from './modules/platform/routes';
 import { developerRouter } from './modules/developer/routes';
+import { patientRecordsRouter } from './modules/patients/routes';
 import { geofenceRouter } from './modules/geofence/routes';
 import { relayAfterResponse } from './realtime/afterResponse';
 import { pushRouter } from './modules/push/routes';
@@ -51,6 +52,7 @@ export const API_MOUNTS: [string, Router][] = [
   ['/assistant', assistantRouter],
   ['/attendance', attendanceRouter],
   ['/doctor', doctorRouter],
+  ['/patient-records', patientRecordsRouter],
   ['/manager/messages', messagesRouter],
   ['/manager/approvals', managerApprovalsRouter],
   ['/manager', managerProceduresRouter],

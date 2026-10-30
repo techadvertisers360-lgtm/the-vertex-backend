@@ -27,6 +27,7 @@ export const PERMISSIONS = [
   // reception
   'patients:search',
   'patients:create',
+  'patients:records', // Manager / MD: every patient's full history, view only (D-078)
   'reception:checkin',
   'reception:vitals',
   'reception:billing',
@@ -130,6 +131,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'manager:approvals',
     'requests:inbox',
     'patients:search',
+    'patients:records',
     'appointments:book',
     'appointments:read',
     'appointments:reschedule',
@@ -152,6 +154,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'md:dashboard',
     'md:approvals',
     'requests:inbox',
+    'patients:records',
     'reports:all',
     'stock:approve_md',
     'leads:admin',
@@ -242,6 +245,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   MANAGER: [
     { key: 'dashboard', label: 'Dashboard', path: '/manager', permission: 'manager:dashboard' },
     { key: 'tracker', label: 'Patient Tracker', path: '/manager/tracker', permission: 'appointments:read' },
+    { key: 'patient-records', label: 'Patient Records', path: '/manager/patients', permission: 'patients:records' },
     { key: 'schedule', label: 'Doctors, Timing & Rooms', path: '/manager/schedule', permission: 'availability:approve' },
     { key: 'staff', label: 'Staff', path: '/manager/staff', permission: 'manager:staff_review' },
     { key: 'rooms', label: 'Room Verification', path: '/manager/rooms', permission: 'manager:room_verify' },
@@ -256,6 +260,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   ],
   MD: [
     { key: 'dashboard', label: 'Overview', path: '/md', permission: 'md:dashboard' },
+    { key: 'patient-records', label: 'Patient Records', path: '/md/patients', permission: 'patients:records' },
     { key: 'approvals', label: 'Approval Center', path: '/md/approvals', permission: 'md:approvals' },
     { key: 'escalations', label: 'Complaints & Escalations', path: '/md/escalations', permission: 'requests:inbox' },
     { key: 'reports', label: 'Reports', path: '/md/reports', permission: 'reports:all' },
