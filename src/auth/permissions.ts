@@ -27,6 +27,7 @@ export const PERMISSIONS = [
   // reception
   'patients:search',
   'patients:create',
+  'bank:manage', // Manager / MD: clinic bank accounts for online payments (D-080)
   'patients:records', // Manager / MD: every patient's full history, view only (D-078)
   'reception:checkin',
   'reception:vitals',
@@ -132,6 +133,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'requests:inbox',
     'patients:search',
     'patients:records',
+    'bank:manage',
     'appointments:book',
     'appointments:read',
     'appointments:reschedule',
@@ -155,6 +157,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'md:approvals',
     'requests:inbox',
     'patients:records',
+    'bank:manage',
     'reports:all',
     'stock:approve_md',
     'leads:admin',
@@ -254,6 +257,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'approvals', label: 'Approvals', path: '/manager/approvals', permission: 'manager:approvals' },
     { key: 'stock', label: 'Stock & Vendors', path: '/manager/stock', permission: 'stock:manage' },
     { key: 'cash', label: 'Cash Closing', path: '/manager/cash', permission: 'cash:closing' },
+    { key: 'bank-accounts', label: 'Bank Accounts', path: '/manager/bank-accounts', permission: 'bank:manage' },
     { key: 'messages', label: 'Message Log', path: '/manager/messages', permission: 'messages:log' },
     { key: 'audit', label: 'Audit & History', path: '/manager/audit', permission: 'audit:search' },
     { key: 'settings', label: 'Settings', path: '/manager/settings', permission: 'settings:manage' },
@@ -264,6 +268,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'approvals', label: 'Approval Center', path: '/md/approvals', permission: 'md:approvals' },
     { key: 'escalations', label: 'Complaints & Escalations', path: '/md/escalations', permission: 'requests:inbox' },
     { key: 'reports', label: 'Reports', path: '/md/reports', permission: 'reports:all' },
+    { key: 'bank-accounts', label: 'Bank Accounts', path: '/md/bank-accounts', permission: 'bank:manage' },
     { key: 'lead-admin', label: 'Lead Team Admin', path: '/md/lead-admin', permission: 'leads:admin' },
     { key: 'audit', label: 'Audit & History', path: '/md/audit', permission: 'audit:search' },
     { key: 'settings', label: 'Settings', path: '/md/settings', permission: 'settings:manage' },
