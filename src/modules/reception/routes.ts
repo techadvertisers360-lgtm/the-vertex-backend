@@ -4,6 +4,7 @@ import { AppointmentStatus, AppointmentType, PaymentMethod } from '@prisma/clien
 import { idParam, route } from '../../middleware/route';
 import * as svc from './service';
 import { walkIn } from './walkIn';
+import { upcomingAppointments } from './upcoming';
 import * as pharmacy from './pharmacy';
 import * as rstock from './stock';
 import * as services from './services';
@@ -127,6 +128,16 @@ receptionRouter.post(
 );
 
 receptionRouter.get('/tracker', route({ permission: ['reception:checkin', 'manager:dashboard'], query: z.object({ date: isoDate.optional() }) }, async ({ query }) => svc.tracker(query.date)));
+receptionRouter.get(
+  '/upcoming-appointments',
+  route(
+    {
+      permission: 'reception:checkin',
+      query: z.object({ days: z.coerce.number().int().min(1).max(60).default(7), type: z.enum(['CONSULTATION', 'PROCEDURE']).optional(), doctorId: z.string().max(64).optional() }),
+    },
+    async ({ query }) => upcomingAppointments(query, 'reception'),
+  ),
+);
 receptionRouter.get('/doctors-today', route({ permission: ['reception:checkin', 'manager:dashboard', 'md:dashboard'] }, async () => svc.doctorsToday()));
 receptionRouter.get('/done', route({ permission: ['reception:checkin', 'manager:dashboard'], query: z.object({ date: isoDate.optional() }) }, async ({ query }) => svc.doneList(query.date)));
 

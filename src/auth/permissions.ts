@@ -219,6 +219,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'patients', label: 'Patients', path: '/reception/patients', permission: 'patients:search' },
     { key: 'tracker', label: 'Active Tracker', path: '/reception/tracker', permission: 'reception:checkin' },
     { key: 'procedures', label: 'Procedures', path: '/reception/procedures', permission: 'reception:assign_procedure' },
+    { key: 'upcoming-appointments', label: 'Upcoming Appointments', path: '/reception/appointments', permission: 'reception:checkin' },
     { key: 'upcoming', label: 'Upcoming Procedures', path: '/reception/upcoming', permission: 'reception:assign_procedure' },
     { key: 'billing', label: 'Billing', path: '/reception/billing', permission: 'reception:billing' },
     { key: 'counter-sale', label: 'Counter Sale (Pharmacy)', path: '/reception/counter-sale', permission: 'reception:billing' },
@@ -229,6 +230,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   ],
   DOCTOR: [
     { key: 'queue', label: 'My Queue', path: '/doctor', permission: 'doctor:queue' },
+    { key: 'upcoming', label: 'Upcoming Appointments', path: '/doctor/upcoming', permission: 'doctor:queue' },
     { key: 'patients', label: 'My Patients', path: '/doctor/patients', permission: 'doctor:history_own' },
     { key: 'history-requests', label: 'History Requests', path: '/doctor/history-requests', permission: 'doctor:history_request' },
     { key: 'availability', label: 'Leave & Availability', path: '/doctor/availability', permission: 'availability:own' },

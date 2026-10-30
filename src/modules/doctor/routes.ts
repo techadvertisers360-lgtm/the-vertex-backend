@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { upcomingAppointments } from '../reception/upcoming';
 import { AvailabilityKind } from '@prisma/client';
 import { idParam, route } from '../../middleware/route';
 import * as svc from './service';
@@ -10,6 +11,14 @@ export const doctorRouter = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const paisa = z.number().int().min(0).max(1_000_000_000_00);
 
+// Own upcoming bookings only (D-081).
+doctorRouter.get(
+  '/upcoming',
+  route(
+    { permission: 'doctor:queue', query: z.object({ days: z.coerce.number().int().min(1).max(60).default(7), type: z.enum(['CONSULTATION', 'PROCEDURE']).optional() }) },
+    async ({ actor, query }) => upcomingAppointments({ ...query, doctorId: actor.id! }, 'doctor'),
+  ),
+);
 doctorRouter.get('/queue', route({ permission: 'doctor:queue', query: z.object({ date: isoDate.optional() }) }, async ({ actor, query }) => svc.queue(actor, query.date)));
 doctorRouter.post('/appointments/:id/accept', route({ permission: 'doctor:queue', params: idParam }, async ({ actor, params }) => svc.accept(actor, params.id)));
 doctorRouter.get('/appointments/:id', route({ permission: 'doctor:queue', params: idParam }, async ({ actor, params }) => svc.getConsultation(actor, params.id)));
