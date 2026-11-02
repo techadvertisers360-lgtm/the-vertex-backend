@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import { prisma, type Db } from '../lib/prisma';
-import { ValidationError } from '../lib/errors';
+import { ForbiddenError, ValidationError } from '../lib/errors';
+import { hasPermission } from '../auth/permissions';
 import { audit, type Actor } from './audit';
 
 /**
@@ -34,6 +35,10 @@ export const SETTING_DEFS = {
   'stock.managerApprovalLimitPaisa': { schema: z.number().int().positive(), default: 2_000_000, placeholder: false, description: 'Manager demand approval limit, inclusive (spec: Rs 20,000).' },
   'invoice.numberPrefix': { schema: z.string().min(1).max(10), default: 'VH-INV', placeholder: true, description: 'Invoice number prefix. §26 #8' },
   'invoice.taxBasisPoints': { schema: z.number().int().min(0).max(10000), default: 0, placeholder: true, description: 'Tax rate in basis points (0 = no tax). §26 #8' },
+  'invoice.taxEnabled': { schema: z.boolean(), default: false, placeholder: true, description: 'Tax on / off for direct invoices (D-084). Accountant to confirm. §26 #8' },
+  'invoice.numberFormat': { schema: z.string().min(5).max(40).regex(/\{SEQ\}/, 'Format must contain {SEQ}'), default: '{PREFIX}-{YYYY}-{SEQ}', placeholder: true, description: 'Invoice number format: {PREFIX}, {YYYY}, {YY}, {SEQ} (D-084). §26 #8' },
+  'clinic.name': { schema: z.string().trim().min(1).max(120), default: 'The Vertex Health', placeholder: true, description: 'Clinic name on printed invoices (D-084).' },
+  'clinic.logoAttachmentId': { schema: z.string().min(1).max(64).nullable(), default: null, placeholder: true, description: 'Clinic logo on printed invoices (D-084).' },
   'notify.quietHoursStart': { schema: hhmm.nullable(), default: null, placeholder: true, description: 'Patient message quiet hours start (null = none). §26 #9' },
   'notify.quietHoursEnd': { schema: hhmm.nullable(), default: null, placeholder: true, description: 'Patient message quiet hours end. §26 #9' },
   'notify.maxRetries': { schema: z.number().int().min(0).max(20), default: 5, placeholder: true, description: 'Message send retries before terminal failure. §26 #9' },
@@ -67,6 +72,9 @@ export const SETTING_DEFS = {
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFS;
+
+/** MD only (D-084): hidden from the general Settings screen of other roles and refused there on the server. */
+export const invoiceSettingKeys: readonly SettingKey[] = ['invoice.numberPrefix', 'invoice.numberFormat', 'invoice.taxEnabled', 'invoice.taxBasisPoints', 'clinic.name', 'clinic.logoAttachmentId'];
 export type SettingValue<K extends SettingKey> = z.infer<(typeof SETTING_DEFS)[K]['schema']>;
 
 const cache = new Map<string, { v: unknown; at: number }>();
@@ -87,10 +95,11 @@ export async function getSetting<K extends SettingKey>(key: K, db: Db = prisma):
   return v;
 }
 
-export async function listSettings() {
+export async function listSettings(role: Role) {
   const rows = await prisma.setting.findMany();
   const byKey = new Map(rows.map((r) => [r.key, r]));
-  return (Object.keys(SETTING_DEFS) as SettingKey[]).map((key) => {
+  const visible = (Object.keys(SETTING_DEFS) as SettingKey[]).filter((key) => hasPermission(role, 'invoice:settings') || !invoiceSettingKeys.includes(key));
+  return visible.map((key) => {
     const def = SETTING_DEFS[key];
     const row = byKey.get(key);
     return {
@@ -105,6 +114,9 @@ export async function listSettings() {
 
 export async function updateSetting(actor: Actor, key: string, value: unknown, confirm: boolean): Promise<void> {
   if (!(key in SETTING_DEFS)) throw new ValidationError(`Unknown setting ${key}`);
+  if (invoiceSettingKeys.includes(key as SettingKey) && !(actor.role && hasPermission(actor.role, 'invoice:settings'))) {
+    throw new ForbiddenError({ recordType: 'Setting', recordId: key, rule: 'permission:invoice:settings' });
+  }
   const def = SETTING_DEFS[key as SettingKey];
   const parsed = def.schema.safeParse(value);
   if (!parsed.success) throw new ValidationError(`Invalid value for ${key}`, parsed.error.flatten());

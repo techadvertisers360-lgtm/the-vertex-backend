@@ -1,3 +1,4 @@
+import { advanceMoney } from '../../services/invoicePayments';
 import { prisma } from '../../lib/prisma';
 import { addDaysStr, addMinutes, clinicDate, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, formatClinic } from '../../lib/time';
 import type { Actor } from '../../services/audit';
@@ -41,7 +42,7 @@ export async function dashboard(actor: Actor) {
     prisma.stockDemand.count({ where: { status: 'PENDING_MANAGER' } }),
     prisma.followUp.count({ where: { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueDate: { lte: dateOnly(today) } } }),
     prisma.followUp.count({ where: { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueDate: tomorrow } }),
-    prisma.payment.groupBy({ by: ['method'], where: { receivedAt: { gte: b.start, lt: b.end } }, _sum: { amountPaisa: true } }),
+    prisma.payment.groupBy({ by: ['method'], where: { receivedAt: { gte: b.start, lt: b.end }, method: { not: 'ADVANCE' } }, _sum: { amountPaisa: true } }),
     prisma.procedureTask.findMany({ where: { status: { in: ['PENDING', 'IN_PROGRESS', 'BLOCKED'] }, assistantId: { not: null } }, select: { id: true, status: true, consentAlertAt: true, cleanAlertAt: true, assistantId: true, roomId: true, assignedAt: true } }),
   ]);
 
@@ -117,7 +118,10 @@ export async function dashboard(actor: Actor) {
   highlights.sort((x, y) => order[x.severity] - order[y.severity] || y.at.getTime() - x.at.getTime());
 
   const byStatus = Object.fromEntries(apptCounts.map((c) => [c.status, c._count._all]));
-  const totalPaid = payments.reduce((s, p) => s + (p._sum.amountPaisa ?? 0n), 0n);
+  // Advances received or refunded today are money too (D-084); a payment from an advance was left out above.
+  const byMethod = new Map(payments.map((p) => [p.method as string, p._sum.amountPaisa ?? 0n]));
+  for (const a of await advanceMoney(b)) if (a.method) byMethod.set(a.method, (byMethod.get(a.method) ?? 0n) + a.amountPaisa);
+  const totalPaid = [...byMethod.values()].reduce((s, v) => s + v, 0n);
   return {
     date: today,
     cards: {
@@ -133,7 +137,7 @@ export async function dashboard(actor: Actor) {
       verification: { pending: rr.items.length + orr.items.length, withIssue: rr.items.filter((x) => x.issue).length + orr.items.filter((x) => x.issue).length },
       requests: { complaints: complaints.length, leave: leave.length },
       stock: { low: lowStock.length, demandsPending: demands, lowItems: lowStock.slice(0, 5).map((i) => i.name) },
-      cash: { totalPaisa: totalPaid, byMethod: Object.fromEntries(payments.map((p) => [p.method, p._sum.amountPaisa ?? 0n])) },
+      cash: { totalPaisa: totalPaid, byMethod: Object.fromEntries(byMethod) },
       followups: { due: followDue, tomorrow: followTomorrow },
       approvals: { total: leave.length + reschedules.length + historyReq + altHours + demands },
     },

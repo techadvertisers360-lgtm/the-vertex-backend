@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { toJsonSafe } from '../../src/lib/misc';
 import { agentFor, call, prisma } from './helpers';
 
 /** D-062 — clinic location restriction: developer settings, per-user switch, server-side claim on every API call. */
@@ -59,7 +60,7 @@ describe('D-062 — geofence', () => {
     expect(u.geoLastInside).toBe(true);
     expect(u.geoLastDistanceM).toBeLessThan(200);
     const logged = await prisma.auditEvent.findMany({ where: { action: 'GEOFENCE_BLOCKED', recordId: a.user.id } });
-    expect(JSON.stringify(logged)).not.toContain(String(FAR.latitude));
+    expect(JSON.stringify(toJsonSafe(logged))).not.toContain(String(FAR.latitude));
 
     // an expired claim blocks again
     await prisma.session.updateMany({ where: { userId: a.user.id }, data: { geoClaimUntil: new Date(Date.now() - 1000) } });

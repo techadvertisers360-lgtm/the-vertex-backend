@@ -31,7 +31,7 @@ notificationsRouter.post(
 
 export const settingsRouter = Router();
 
-settingsRouter.get('/', route({ permission: 'settings:manage' }, async () => ({ items: await listSettings() })));
+settingsRouter.get('/', route({ permission: 'settings:manage' }, async ({ user }) => ({ items: await listSettings(user.role) })));
 
 settingsRouter.put(
   '/:key',

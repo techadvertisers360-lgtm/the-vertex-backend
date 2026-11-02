@@ -12,7 +12,8 @@ cron-job.org ── every minute ──► Backend /api/cron/tick (worker cycle:
   `GET /api/realtime/token` (session-checked). A Supabase RLS policy lets a token read only its own channel;
   browsers can never send. If Realtime is down the screens poll every 30 s, as before.
 - Locally nothing changes: `npm run dev` + `npm run worker` with Socket.IO (`REALTIME_PROVIDER=socketio`).
-- **Schema changes** are applied from your machine with `npx prisma migrate deploy` (DATABASE_URL = Aiven).
+- **Schema changes** are applied from your machine with `npx prisma migrate deploy`, loading `DATABASE_URL` from
+  `secrets/aiven-production.env` for that one command. `backend/.env` stays on a local database.
   Vercel never migrates.
 
 ## 1. Supabase (live notifications only)

@@ -3,6 +3,7 @@ import { ConflictError, ValidationError } from '../../lib/errors';
 import { addDaysStr, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
 import { installmentViews } from '../../services/installments';
+import { advanceMoney } from '../../services/invoicePayments';
 
 /**
  * Cash (spec §14): the daily closing reviews Reception collections, discounts, cash/bank/cheque, cash paid out to
@@ -17,18 +18,24 @@ export async function daySummary(date?: string) {
   const d = date ?? clinicDateStr(new Date());
   if (d > clinicDateStr(new Date())) throw new ValidationError('Aane wale din ka hisaab nahi.');
   const b = clinicDayBounds(d);
-  const [payments, invoices, cashLedger, supplierPayments, closing] = await Promise.all([
+  const [allPayments, advances, invoices, cashLedger, supplierPayments, closing] = await Promise.all([
     prisma.payment.findMany({ where: { receivedAt: { gte: b.start, lt: b.end } }, select: { id: true, receiptNo: true, amountPaisa: true, method: true, reference: true, cashierId: true, receivedAt: true, invoiceId: true } }),
+    advanceMoney(b),
     prisma.invoice.findMany({ where: { createdAt: { gte: b.start, lt: b.end } }, select: { id: true, discountPaisa: true } }),
     prisma.ledgerEntry.findMany({ where: { account: 'CASH_IN_HAND', createdAt: { gte: b.start, lt: b.end } }, select: { amountPaisa: true, refType: true } }),
     prisma.supplierPayment.findMany({ where: { paidAt: { gte: b.start, lt: b.end } }, select: { id: true, vendorId: true, amountPaisa: true, method: true, reference: true, paidAt: true } }),
     prisma.cashClosing.findUnique({ where: { date: dateOnly(d) } }),
   ]);
-  const byMethod = (m: string) => sumBy(payments.filter((p) => p.method === m), (p) => p.amountPaisa);
+  // Method ADVANCE is not new money (D-084): it was counted when the advance came in. Money that really moved is the
+  // payments in other methods plus advances received and refunded.
+  const payments = allPayments.filter((p) => p.method !== 'ADVANCE');
+  const advanceRows = advances.map((a) => ({ id: a.id, receiptNo: a.receiptNo ?? '', amountPaisa: a.amountPaisa, method: a.method!, reference: a.reference, cashierId: a.actorId, receivedAt: a.createdAt, invoiceId: null as string | null }));
+  const money = [...payments, ...advanceRows];
+  const byMethod = (m: string) => sumBy(money.filter((p) => p.method === m), (p) => p.amountPaisa);
   const cashIn = sumBy(cashLedger.filter((l) => l.amountPaisa > 0n), (l) => l.amountPaisa);
   const cashOut = -sumBy(cashLedger.filter((l) => l.amountPaisa < 0n), (l) => l.amountPaisa);
   const [cashiers, vendors] = await Promise.all([
-    prisma.user.findMany({ where: { id: { in: [...new Set([...payments.map((p) => p.cashierId), closing?.managerId, closing?.cashierId].filter((x): x is string => !!x))] } }, select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { id: { in: [...new Set([...money.map((p) => p.cashierId), closing?.managerId, closing?.cashierId].filter((x): x is string => !!x))] } }, select: { id: true, displayName: true } }),
     prisma.vendor.findMany({ where: { id: { in: supplierPayments.map((s) => s.vendorId) } }, select: { id: true, name: true } }),
   ]);
   const name = (id: string | null | undefined) => (id ? (cashiers.find((u) => u.id === id)?.displayName ?? null) : null);
@@ -36,15 +43,15 @@ export async function daySummary(date?: string) {
   const paidInvoices = await prisma.invoice.findMany({ where: { id: { in: [...new Set(payments.map((p) => p.invoiceId))] } }, select: { id: true, number: true, kind: true } });
   const invoiceOf = (id: string) => paidInvoices.find((i) => i.id === id);
   const counter = payments.filter((p) => invoiceOf(p.invoiceId)?.kind === 'COUNTER');
-  const perCashier = [...new Set(payments.map((p) => p.cashierId))].map((id) => {
-    const mine = payments.filter((p) => p.cashierId === id);
+  const perCashier = [...new Set(money.map((p) => p.cashierId))].map((id) => {
+    const mine = money.filter((p) => p.cashierId === id);
     return { cashierId: id, name: name(id), count: mine.length, totalPaisa: sumBy(mine, (p) => p.amountPaisa), cashPaisa: sumBy(mine.filter((p) => p.method === 'CASH'), (p) => p.amountPaisa) };
   });
   return {
     date: d,
     collections: {
-      count: payments.length,
-      totalPaisa: sumBy(payments, (p) => p.amountPaisa),
+      count: money.length,
+      totalPaisa: sumBy(money, (p) => p.amountPaisa),
       cashPaisa: byMethod('CASH'),
       cardPaisa: byMethod('CARD'),
       bankPaisa: byMethod('BANK_ONLINE'),
@@ -58,10 +65,19 @@ export async function daySummary(date?: string) {
       cashPaisa: sumBy(counter.filter((p) => p.method === 'CASH'), (p) => p.amountPaisa),
       bankPaisa: sumBy(counter.filter((p) => p.method !== 'CASH'), (p) => p.amountPaisa),
     },
+    /** Patient advances (D-084): received and refunded are inside the collections above; applied is not new money. */
+    advances: {
+      receivedPaisa: sumBy(advances.filter((a) => a.type === 'RECEIPT'), (a) => a.amountPaisa),
+      refundedPaisa: -sumBy(advances.filter((a) => a.type === 'REFUND'), (a) => a.amountPaisa),
+      appliedPaisa: sumBy(allPayments.filter((p) => p.method === 'ADVANCE'), (p) => p.amountPaisa),
+    },
     cash: { inPaisa: cashIn, outPaisa: cashOut, expectedPaisa: cashIn - cashOut },
     supplierPayments: supplierPayments.map((s) => ({ ...s, vendorName: vendors.find((v) => v.id === s.vendorId)?.name ?? null })),
     perCashier,
-    payments: payments.map((p) => ({ ...p, cashierName: name(p.cashierId), invoiceNumber: invoiceOf(p.invoiceId)?.number ?? null, counterSale: invoiceOf(p.invoiceId)?.kind === 'COUNTER' })),
+    payments: money.map((p) => {
+      const inv = p.invoiceId ? invoiceOf(p.invoiceId) : undefined;
+      return { ...p, cashierName: name(p.cashierId), invoiceNumber: inv?.number ?? null, counterSale: inv?.kind === 'COUNTER', advance: !p.invoiceId };
+    }),
     closing: closing && { ...closing, date: dateOnlyStr(closing.date), managerName: name(closing.managerId), cashierName: name(closing.cashierId) },
   };
 }

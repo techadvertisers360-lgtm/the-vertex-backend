@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { AppointmentStatus, AppointmentType, PaymentMethod } from '@prisma/client';
+import { AppointmentStatus, AppointmentType } from '@prisma/client';
+import { MONEY_METHODS } from '../../lib/paymentMethods';
 import { idParam, route } from '../../middleware/route';
 import * as svc from './service';
 import { walkIn } from './walkIn';
@@ -154,7 +155,7 @@ receptionRouter.post(
       status: 201,
       body: z.object({
         amountPaisa: z.number().int().positive(),
-        method: z.nativeEnum(PaymentMethod),
+        method: z.enum(MONEY_METHODS),
         reference: z.string().max(100).optional(),
         bankAccountId: z.string().optional(),
       }),
@@ -321,7 +322,7 @@ receptionRouter.post(
         buyerPhone: z.string().trim().max(30).optional(),
         lines: z.array(z.object({ itemId: z.string().min(1).max(64), quantity: z.number().int().min(1).max(100_000), unitPricePaisa: paisa, discount })).min(1).max(100),
         payments: z
-          .array(z.object({ method: z.nativeEnum(PaymentMethod), amountPaisa: paisa, bankAccountId: z.string().min(1).max(64).optional(), reference: z.string().trim().max(120).optional() }))
+          .array(z.object({ method: z.enum(MONEY_METHODS), amountPaisa: paisa, bankAccountId: z.string().min(1).max(64).optional(), reference: z.string().trim().max(120).optional() }))
           .max(10),
       }),
     },

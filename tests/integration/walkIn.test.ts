@@ -80,13 +80,13 @@ describe('D-075 — walk-in desk', () => {
     const inv = await rec.post(`/api/reception/appointments/${res.body.appointment.id}/invoice`);
     expect(inv.status).toBe(201);
     expect(inv.body).toMatchObject({ totalPaisa: 300_000 });
-    expect((await rec.post('/api/reception/walk-in', { patientId: p.id, intent: 'CONSULTATION' }, newKey())).status).toBe(400);
+    expect((await rec.post('/api/reception/walk-in', { patientId: p.id, intent: 'CONSULTATION' }, newKey())).status).toBe(422);
   });
 
   it('procedure needs a service; Office Boy cannot use the desk', async () => {
     const doctor = await allDayDoctor();
     const p = await newPatient();
-    expect((await rec.post('/api/reception/walk-in', { patientId: p.id, intent: 'PROCEDURE_ASSISTANT', doctorId: doctor.id }, newKey())).status).toBe(400);
+    expect((await rec.post('/api/reception/walk-in', { patientId: p.id, intent: 'PROCEDURE_ASSISTANT', doctorId: doctor.id }, newKey())).status).toBe(422);
     const office = call((await agentFor('OFFICE_BOY')).agent);
     expect((await office.post('/api/reception/walk-in', { patientId: p.id, intent: 'CONSULTATION', doctorId: doctor.id }, newKey())).status).toBe(403);
   });

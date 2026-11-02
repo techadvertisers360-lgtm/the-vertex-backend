@@ -59,6 +59,15 @@ export const prisma = new PrismaClient({
 export type Tx = Prisma.TransactionClient;
 export type Db = PrismaClient | Tx;
 
+/**
+ * A transaction for money and stock that locks a row, then reads what it decides on. MySQL's default isolation keeps
+ * the snapshot from the transaction's first read, so a request that waited for the lock would still see the old
+ * balance and let a second payment through (D-084). READ COMMITTED makes each read after the lock current.
+ */
+export function moneyTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return prisma.$transaction(fn, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+}
+
 /** Run `fn` in a new transaction, or inside the caller's transaction when `db` already is one. */
 export async function inTx<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   if ('$transaction' in db) {

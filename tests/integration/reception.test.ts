@@ -165,6 +165,9 @@ describe('billing (spec §9, §22, §24)', () => {
     expect(inv.body.totalPaisa).toBe(1_050_000); // 2000 + (10000-1000) - 500 Rs
     expect(inv.body.balancePaisa).toBe(1_050_000);
     expect(inv.body.number).toMatch(/^VH-INV-\d{4}-\d{4}$/);
+    expect(inv.body.doctorId).toBe(a.doctorId); // D-084: the list filters by Doctor
+    expect(inv.body.invoiceDate.slice(0, 10)).toBe(clinicDateStr(new Date()));
+    expect(inv.body).toMatchObject({ kind: 'VISIT', taxPaisa: 0, taxRateBp: null });
     const again = await r.api.post(`/api/reception/appointments/${a.id}/invoice`);
     expect(again.body.id).toBe(inv.body.id); // one invoice per visit
   });
@@ -230,7 +233,12 @@ describe('billing (spec §9, §22, §24)', () => {
     const thanks = await prisma.messageOutbox.findFirstOrThrow({ where: { relatedId: a.id, template: 'visit_thanks' } });
     expect((thanks.payload as { feedbackLink: string | null }).feedbackLink).toBeNull(); // skipped at desk → no link
     expect(await prisma.followUp.count({ where: { appointmentId: a.id, patientId: p.id } })).toBe(1);
-    expect((await r.api.post(`/api/reception/invoices/${inv.id}/payments`, { amountPaisa: 100, method: 'CASH' }, newKey())).status).toBe(409); // closed
+    // D-084: an installment can be paid after close; the visit stays DONE, and it stops once nothing is owed.
+    const later = await r.api.post(`/api/reception/invoices/${inv.id}/payments`, { amountPaisa: 550_000, method: 'CASH' }, newKey());
+    expect(later.status, JSON.stringify(later.body)).toBe(201);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: inv.id } })).toMatchObject({ status: 'CLOSED', balancePaisa: 0n });
+    expect((await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } })).status).toBe('DONE');
+    expect((await r.api.post(`/api/reception/invoices/${inv.id}/payments`, { amountPaisa: 100, method: 'CASH' }, newKey())).status).toBe(409); // nothing left to pay
   });
 
   it('close is refused while the patient is still in a procedure', async () => {

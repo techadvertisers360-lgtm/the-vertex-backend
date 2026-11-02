@@ -1,4 +1,4 @@
-import type { PaymentMethod } from '@prisma/client';
+import type { MoneyMethod } from '../../lib/paymentMethods';
 import { prisma } from '../../lib/prisma';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors';
 import { clinicDateStr, dateOnly, dateOnlyStr } from '../../lib/time';
@@ -159,7 +159,7 @@ export async function vendorLedger(vendorId: string) {
  * Record money paid to a vendor (D-050). Any amount: above what the clinic owes it becomes an advance (the vendor
  * balance goes below zero and later purchases use it up). Optional note: what the payment was for.
  */
-export async function payVendor(actor: Actor, vendorId: string, input: { amountPaisa: number; method: PaymentMethod; reference?: string; bankAccountId?: string; note?: string }, idempotencyKey: string) {
+export async function payVendor(actor: Actor, vendorId: string, input: { amountPaisa: number; method: MoneyMethod; reference?: string; bankAccountId?: string; note?: string }, idempotencyKey: string) {
   if (input.method === 'CARD') throw new ValidationError('Supplier payment: cash, cheque ya bank/online.');
   if (input.method !== 'CASH' && !input.bankAccountId) throw new ValidationError('Bank account chunein.');
   if (input.method !== 'CASH' && !input.reference?.trim()) throw new ValidationError(input.method === 'CHEQUE' ? 'Cheque number likhein.' : 'Transaction reference likhein.');

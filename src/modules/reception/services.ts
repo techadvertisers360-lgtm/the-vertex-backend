@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma';
 import { ConflictError, NotFoundError } from '../../lib/errors';
 import { audit, type Actor } from '../../services/audit';
+import { invoiceCategoryFor } from '../../services/invoiceCategories';
 
 /**
  * Reception "Procedures & Services" (client 2026-10-26, D-060): the `Service` catalogue — the same list the booking
@@ -29,7 +30,7 @@ export async function add(actor: Actor, input: ServiceInput) {
   const name = clean(input.name)!;
   return prisma.$transaction(async (tx) => {
     if (await tx.service.findFirst({ where: { name } })) throw new ConflictError('SERVICE_EXISTS', `"${name}" pehle se list mein hai.`);
-    const svc = await tx.service.create({ data: { name, type: 'PROCEDURE', category: clean(input.category) ?? null, source: clean(input.source) ?? null, note: clean(input.note) ?? null } });
+    const svc = await tx.service.create({ data: { name, type: 'PROCEDURE', invoiceCategoryId: await invoiceCategoryFor(tx, clean(input.category), 'PROCEDURE'), category: clean(input.category) ?? null, source: clean(input.source) ?? null, note: clean(input.note) ?? null } });
     await audit(tx, actor, { action: 'SERVICE_CREATED', recordType: 'Service', recordId: svc.id, after: svc });
     return { id: svc.id };
   });
@@ -46,7 +47,7 @@ export async function update(actor: Actor, id: string, input: Partial<ServiceInp
       where: { id },
       data: {
         ...(name ? { name } : {}),
-        ...(input.category !== undefined ? { category: clean(input.category) } : {}),
+        ...(input.category !== undefined ? { category: clean(input.category), invoiceCategoryId: await invoiceCategoryFor(tx, clean(input.category), before.type) } : {}),
         ...(input.source !== undefined ? { source: clean(input.source) } : {}),
         ...(input.note !== undefined ? { note: clean(input.note) } : {}),
         ...(input.active !== undefined ? { active: input.active } : {}),

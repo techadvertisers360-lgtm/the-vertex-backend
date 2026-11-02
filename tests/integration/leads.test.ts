@@ -224,7 +224,7 @@ describe('D-071 — connection booking', () => {
     const busy = await m.api.post('/api/lead/connection-book', { ...body, patient: { ...body.patient, phone: uniquePhone(), name: 'Other Person' } }, newKey());
     expect(busy.status).toBe(409);
     // phone is required
-    expect((await m.api.post('/api/lead/connection-book', { ...body, patient: { name: 'No Phone' } }, newKey())).status).toBe(400);
+    expect((await m.api.post('/api/lead/connection-book', { ...body, patient: { name: 'No Phone' } }, newKey())).status).toBe(422);
     const office = call((await agentFor('OFFICE_BOY')).agent);
     expect((await office.post('/api/lead/connection-book', body, newKey())).status).toBe(403);
   });

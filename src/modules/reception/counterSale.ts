@@ -1,9 +1,9 @@
-import type { PaymentMethod } from '@prisma/client';
-import { prisma } from '../../lib/prisma';
+import type { MoneyMethod } from '../../lib/paymentMethods';
+import { moneyTx, prisma } from '../../lib/prisma';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import { formatNumber, nextSequence } from '../../lib/misc';
 import { normalizePhone } from '../../lib/phone';
-import { clinicDateStr, clinicDayBounds, local } from '../../lib/time';
+import { clinicDate, clinicDateStr, clinicDayBounds, local } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
 import { getSetting } from '../../services/settings';
 import { checkLowStock, usableBatches } from '../../services/stock';
@@ -27,7 +27,7 @@ export interface CounterLineInput {
 }
 
 export interface CounterPaymentInput {
-  method: PaymentMethod;
+  method: MoneyMethod;
   amountPaisa: number;
   bankAccountId?: string;
   reference?: string;
@@ -56,7 +56,7 @@ export async function createSale(actor: Actor, input: CounterSaleInput, idempote
   if (input.buyerPhone?.trim() && !phone) throw new ValidationError('Phone number sahi likhein.');
   const key = `counter:${idempotencyKey}`;
 
-  const invoiceId = await prisma.$transaction(async (tx) => {
+  const invoiceId = await moneyTx(async (tx) => {
     const replay = await tx.stockTransaction.findFirst({ where: { idempotencyKey: { startsWith: `${key}:` } }, select: { invoiceLineId: true } });
     if (replay?.invoiceLineId) return (await tx.invoiceLine.findUniqueOrThrow({ where: { id: replay.invoiceLineId }, select: { invoiceId: true } })).invoiceId;
 
@@ -91,6 +91,7 @@ export async function createSale(actor: Actor, input: CounterSaleInput, idempote
         buyerName: input.buyerName?.trim() || null,
         buyerPhone: phone,
         status: 'CLOSED',
+        invoiceDate: clinicDate(now),
         subtotalPaisa: subtotal,
         discountPaisa: discount,
         totalPaisa: total,

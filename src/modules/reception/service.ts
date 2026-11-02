@@ -1,9 +1,12 @@
-import type { AppointmentStatus, PaymentMethod, Prisma } from '@prisma/client';
-import { prisma, type Tx } from '../../lib/prisma';
+import type { AppointmentStatus, Prisma } from '@prisma/client';
+import type { MoneyMethod } from '../../lib/paymentMethods';
+import { addMoneyPayment, assertNotCancelled, checkMoneyDetails, moveInvoiceBalance } from '../../services/invoicePayments';
+import { invoiceSequenceName, renderInvoiceNumber } from '../invoices/money';
+import { moneyTx, prisma, type Tx } from '../../lib/prisma';
 import { ConflictError, LockedError, NotFoundError, ValidationError } from '../../lib/errors';
-import { formatNumber, nextSequence, randomToken } from '../../lib/misc';
+import { nextSequence, randomToken } from '../../lib/misc';
 import { phoneSearchFragment } from '../../lib/phone';
-import { addDaysStr, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, formatClinic, local } from '../../lib/time';
+import { addDaysStr, clinicDate, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, formatClinic, local } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
 import { transitionAppointment } from '../../services/appointmentStatus';
 import { announceAppointment } from '../../services/bookingMessages';
@@ -345,14 +348,22 @@ export async function recordVitals(actor: Actor, appointmentId: string, v: Vital
 
 /** The visit an invoice bills. Counter sales (D-061) have none and are handled in counterSale.ts. */
 function visitOf(inv: { appointmentId: string | null; number: string }): string {
-  if (!inv.appointmentId) throw new ConflictError('COUNTER_SALE', `${inv.number} counter sale hai — visit invoice nahi.`);
+  if (!inv.appointmentId) throw new ConflictError('COUNTER_SALE', `${inv.number} visit invoice nahi hai.`);
   return inv.appointmentId;
 }
 
+/**
+ * Next invoice number in the format from Settings (D-084). A number is never reused: if a changed format would produce
+ * one that already exists, the count moves on until it is free.
+ */
 export async function invoiceNumber(tx: Tx): Promise<string> {
-  const prefix = await getSetting('invoice.numberPrefix', tx);
+  const [prefix, format] = await Promise.all([getSetting('invoice.numberPrefix', tx), getSetting('invoice.numberFormat', tx)]);
   const year = local(new Date()).year;
-  return formatNumber(prefix, year, await nextSequence(tx, `invoice:${year}`));
+  const sequence = invoiceSequenceName(format, year);
+  for (;;) {
+    const number = renderInvoiceNumber(format, { prefix, year, seq: await nextSequence(tx, sequence) });
+    if (!(await tx.invoice.findUnique({ where: { number }, select: { id: true } }))) return number;
+  }
 }
 
 /**
@@ -402,6 +413,8 @@ export async function openInvoice(actor: Actor, appointmentId: string) {
         patientId: a.patientId,
         appointmentId,
         planVersionId: b.planVersionId,
+        invoiceDate: clinicDate(new Date()),
+        doctorId: a.doctorId,
         subtotalPaisa: b.subtotal,
         discountPaisa: b.discount,
         totalPaisa: b.total,
@@ -452,7 +465,7 @@ const BALANCE_NOT_SCHEDULED_MSG = 'Baqi balance installment schedule mein nahi �
 
 export interface PaymentInput {
   amountPaisa: number;
-  method: PaymentMethod;
+  method: MoneyMethod;
   reference?: string;
   bankAccountId?: string;
 }
@@ -467,42 +480,21 @@ export async function recordPayment(actor: Actor, invoiceId: string, p: PaymentI
   if (p.method !== 'CASH' && !p.bankAccountId) throw new ValidationError('Bank / card / cheque payment ke liye bank account chunein.');
   if ((p.method === 'CHEQUE' || p.method === 'BANK_ONLINE') && !p.reference?.trim()) throw new ValidationError('Cheque number / transaction reference likhein.');
   const key = `payment:${idempotencyKey}`;
-  return prisma.$transaction(async (tx) => {
+  return moneyTx(async (tx) => {
     const replay = await tx.payment.findUnique({ where: { idempotencyKey: key } });
     if (replay) return { payment: replay, replayed: true };
     await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoiceId} FOR UPDATE`;
     const inv = await tx.invoice.findUnique({ where: { id: invoiceId } });
     if (!inv) throw new NotFoundError('Invoice');
-    if (inv.status !== 'OPEN') throw new ConflictError('INVOICE_CLOSED', 'Invoice close ho chuki hai.');
+    assertNotCancelled(inv);
+    // A closed visit can still be paid while a balance remains, e.g. installments (D-084). The visit is not reopened.
+    if (inv.status === 'CLOSED' && inv.balancePaisa <= 0n) throw new ConflictError('INVOICE_CLOSED', 'Invoice close ho chuki hai.');
     const appointmentId = visitOf(inv);
     const amount = BigInt(p.amountPaisa);
     if (amount > inv.balancePaisa) throw new ValidationError(`Amount balance (${Number(inv.balancePaisa) / 100} Rs) se zyada hai.`);
-    if (p.bankAccountId && !(await tx.bankAccount.findFirst({ where: { id: p.bankAccountId, active: true } }))) throw new ValidationError('Bank account nahi mila.');
-    const year = local(new Date()).year;
-    const payment = await tx.payment.create({
-      data: {
-        receiptNo: formatNumber('VH-RCP', year, await nextSequence(tx, `receipt:${year}`)),
-        invoiceId,
-        amountPaisa: amount,
-        method: p.method,
-        reference: p.reference?.trim() || null,
-        bankAccountId: p.method === 'CASH' ? null : p.bankAccountId!,
-        cashierId: actor.id!,
-        idempotencyKey: key,
-      },
-    });
-    await tx.ledgerEntry.create({
-      data: {
-        account: p.method === 'CASH' ? 'CASH_IN_HAND' : 'BANK',
-        bankAccountId: p.method === 'CASH' ? null : p.bankAccountId!,
-        amountPaisa: amount,
-        refType: 'Payment',
-        refId: payment.id,
-        memo: `Invoice ${inv.number} · ${p.method}`,
-        actorId: actor.id!,
-      },
-    });
-    const updated = await tx.invoice.update({ where: { id: invoiceId }, data: { paidPaisa: inv.paidPaisa + amount, balancePaisa: inv.balancePaisa - amount } });
+    const details = await checkMoneyDetails(tx, { method: p.method, reference: p.reference, bankAccountId: p.bankAccountId });
+    const payment = await addMoneyPayment(tx, actor, inv, amount, details, key);
+    const updated = await moveInvoiceBalance(tx, actor, inv, amount);
     await audit(tx, actor, { action: 'PAYMENT_RECEIVED', recordType: 'Invoice', recordId: invoiceId, before: { paid: inv.paidPaisa, balance: inv.balancePaisa }, after: { paymentId: payment.id, receiptNo: payment.receiptNo, amount, method: p.method, paid: updated.paidPaisa, balance: updated.balancePaisa } });
     const appt = await tx.appointment.findUniqueOrThrow({ where: { id: appointmentId }, select: { id: true, doctorId: true, status: true } });
     await journeyChanged(tx, appt);

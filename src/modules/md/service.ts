@@ -1,3 +1,4 @@
+import { advanceMoney } from '../../services/invoicePayments';
 import { prisma } from '../../lib/prisma';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import { addDaysStr, clinicDate, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, formatClinic } from '../../lib/time';
@@ -37,10 +38,11 @@ export async function dashboard(actor: Actor) {
     prisma.leaveRequest.findMany({ where: { approverRole: 'MD', status: { in: ['PENDING', 'IN_REVIEW'] }, requesterId: { not: actor.id! } }, select: { id: true, requesterId: true, requesterRole: true, kind: true, startAt: true, createdAt: true } }),
     prisma.damageReport.findMany({ where: { approverRole: 'MD', status: 'PENDING' }, select: { id: true, quantity: true, createdAt: true, itemId: true } }),
     prisma.complaint.findMany({ where: { status: { in: ['PENDING', 'IN_REVIEW', 'IN_PROGRESS', 'NEED_DETAILS'] }, recipients: { some: { userId: actor.id! } } }, select: { id: true, subject: true, source: true, escalatedToMdAt: true, createdAt: true } }),
-    prisma.payment.aggregate({ where: { receivedAt: { gte: b.start, lt: b.end } }, _sum: { amountPaisa: true }, _count: { _all: true } }),
+    prisma.payment.aggregate({ where: { receivedAt: { gte: b.start, lt: b.end }, method: { not: 'ADVANCE' } }, _sum: { amountPaisa: true }, _count: { _all: true } }),
     prisma.reportVerification.findMany({ where: { status: 'ESCALATED' }, orderBy: { createdAt: 'desc' }, take: 50 }),
     prisma.doctorAvailabilityException.findMany({ where: { kind: { in: ['LEAVE', 'ABSENT'] }, status: 'APPROVED', impactResolvedAt: null } }),
   ]);
+  const advanceRows = await advanceMoney(b);
   const names = await prisma.user.findMany({ where: { id: { in: [...new Set([...leaves.map((l) => l.requesterId), ...impacts.map((i) => i.doctorId)])] } }, select: { id: true, displayName: true } });
   const nm = (id: string) => names.find((u) => u.id === id)?.displayName ?? '—';
   const h: Highlight[] = [];
@@ -85,7 +87,7 @@ export async function dashboard(actor: Actor) {
       staff: { present: attendance.filter((a) => !a.checkOutAt).length, checkedIn: attendance.length, total: staff },
       approvals: { total: demands.length + leaves.length + damage.length },
       complaints: { open: complaints.length },
-      cash: { todayPaisa: payments._sum.amountPaisa ?? 0n, receipts: payments._count._all },
+      cash: { todayPaisa: (payments._sum.amountPaisa ?? 0n) + advanceRows.reduce((s, a) => s + a.amountPaisa, 0n), receipts: payments._count._all + advanceRows.length },
     },
     highlights: h,
   };

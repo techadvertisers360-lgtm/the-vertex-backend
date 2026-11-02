@@ -182,7 +182,7 @@ describe('§25 #16–17 + D-034 — items deducted once; Send to Reception; room
     const after2 = await upload(t.taskId, 'afterPhoto', uid1);
     const afterVideo = await prisma.attachment.create({ data: { fileKey: `dev_${uid()}`, route: 'afterPhoto', fileName: 'after.mp4', mime: 'video/mp4', size: 40_000_000, isPrivate: true, uploadedById: uid1, recordType: 'ProcedureTask', recordId: t.taskId } });
     const consentFile = await upload(t.taskId, 'consentForm', uid1);
-    expect((await step('after-photo', { attachmentIds: [after1.id, consentFile.id] })).status).toBe(400);
+    expect((await step('after-photo', { attachmentIds: [after1.id, consentFile.id] })).status).toBe(422);
     expect((await step('after-photo', { attachmentIds: [after1.id, after2.id, afterVideo.id] })).body.currentStep).toBe('ITEMS_USED');
     expect((await prisma.procedureTask.findUniqueOrThrow({ where: { id: t.taskId } })).afterPhotoAttachmentId).toBe(after1.id);
 

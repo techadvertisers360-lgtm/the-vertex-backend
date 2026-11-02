@@ -70,6 +70,7 @@ export function route<B extends ZodTypeAny | undefined = undefined, Q extends Zo
 
     if (!opts.idempotent) {
       const out = await handler(ctx);
+      if (res.headersSent) return; // a file download sent its own response
       res.status(opts.status ?? 200).json(toJsonSafe(out ?? { ok: true }));
       return;
     }

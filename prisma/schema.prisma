@@ -275,6 +275,9 @@ enum PaymentMethod {
   CARD
   BANK_ONLINE
   CHEQUE
+  /// Settled from the patient's advance balance, not new money. Internal only: the API never accepts it as a
+  /// payment method, and it has no cash / bank ledger entry.
+  ADVANCE
 }
 
 enum LedgerAccount {
@@ -282,11 +285,29 @@ enum LedgerAccount {
   BANK
   SUPPLIER_PAYABLE
   PATIENT_RECEIVABLE
+  /// What the clinic holds for patients as advances (a liability).
+  PATIENT_ADVANCE
 }
 
 enum InvoiceKind {
   VISIT
   COUNTER
+  /// Typed at the desk from the Invoice module: no appointment, Reception picks the services and prices (D-084).
+  DIRECT
+}
+
+/// What happened to money already received when an invoice was cancelled (D-084).
+enum InvoiceCancelMoney {
+  NONE
+  MOVED_TO_ADVANCE
+  REFUNDED
+}
+
+enum AdvanceEntryType {
+  RECEIPT // + money received as an advance (or the extra on an overpayment)
+  APPLIED // - used on an invoice (with a Payment of method ADVANCE)
+  CANCEL_CREDIT // + money from a cancelled invoice moved to the advance
+  REFUND // - advance paid back to the patient
 }
 
 enum InvoiceStatus {
@@ -385,6 +406,7 @@ model User {
   resetTokens       PasswordResetToken[]
   doctorProfile     DoctorProfile?
   leadProfile       LeadMemberProfile?
+  doctorInvoices    Invoice[]            @relation("InvoiceDoctor")
 
   @@index([role, active])
   @@map("users")
@@ -638,9 +660,12 @@ model Patient {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  appointments Appointment[]
+  appointments   Appointment[]
+  invoices       Invoice[]
+  advanceEntries PatientAdvanceEntry[]
 
   @@unique([phone, phoneSlot])
+  @@index([name])
   @@map("patients")
 }
 
@@ -674,7 +699,12 @@ model Service {
   note              String?         @db.Text
   active            Boolean         @default(true)
   createdAt         DateTime        @default(now())
+  /// Managed category for the invoice service picker (D-084).
+  invoiceCategoryId String?
 
+  invoiceCategory InvoiceCategory? @relation(fields: [invoiceCategoryId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceCategoryId])
   @@map("services")
 }
 
@@ -927,34 +957,54 @@ model Installment {
 }
 
 model Invoice {
-  id                       String        @id @default(cuid())
-  number                   String        @unique
+  id                       String              @id @default(cuid())
+  number                   String              @unique
   /// VISIT = a patient's appointment bill; COUNTER = walk-in pharmacy sale at Reception (D-061), which has no
   /// appointment and may have no patient.
-  kind                     InvoiceKind   @default(VISIT)
+  kind                     InvoiceKind         @default(VISIT)
   patientId                String?
-  appointmentId            String?       @unique
+  appointmentId            String?             @unique
   /// Counter sale buyer, as told at the desk (optional).
   buyerName                String?
   buyerPhone               String?
   planVersionId            String?
-  status                   InvoiceStatus @default(OPEN)
-  subtotalPaisa            BigInt        @default(0)
-  discountPaisa            BigInt        @default(0)
-  totalPaisa               BigInt        @default(0)
-  paidPaisa                BigInt        @default(0)
-  balancePaisa             BigInt        @default(0)
+  status                   InvoiceStatus       @default(OPEN)
+  /// The bill's clinic-local date (Asia/Karachi). Filters and summary cards use this, not createdAt (D-084). The
+  /// default is today at UTC+5, so backend code from before this column can still create invoices during a deploy.
+  invoiceDate              DateTime            @default(dbgenerated("(cast((utc_timestamp() + interval 5 hour) as date))")) @db.Date
+  /// The visit's Doctor copied here, or the Doctor chosen on a DIRECT invoice. Null = no Doctor.
+  doctorId                 String?
+  subtotalPaisa            BigInt              @default(0)
+  discountPaisa            BigInt              @default(0)
+  taxPaisa                 BigInt              @default(0)
+  /// Tax rate applied (basis points). Null = no tax, shown as "N/A".
+  taxRateBp                Int?
+  totalPaisa               BigInt              @default(0)
+  paidPaisa                BigInt              @default(0)
+  balancePaisa             BigInt              @default(0)
   prescriptionAttachmentId String?
   closedAt                 DateTime?
   closedById               String?
+  /// Cancelled (status VOID): never deleted; who, when, why, and what happened to the money.
+  cancelledAt              DateTime?
+  cancelledById            String?
+  cancelReason             String?             @db.Text
+  cancelMoney              InvoiceCancelMoney?
+  /// Retry safety for DIRECT invoices: the same key returns the same invoice.
+  idempotencyKey           String?             @unique
   createdById              String
-  createdAt                DateTime      @default(now())
-  updatedAt                DateTime      @updatedAt
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
 
+  patient  Patient?      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor   User?         @relation("InvoiceDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
   lines    InvoiceLine[]
   payments Payment[]
 
   @@index([status, createdAt])
+  @@index([invoiceDate])
+  @@index([patientId, invoiceDate])
+  @@index([doctorId, invoiceDate])
   @@map("invoices")
 }
 
@@ -963,6 +1013,8 @@ model InvoiceLine {
   invoiceId         String
   description       String
   planItemId        String?
+  /// Picked from the service list on a DIRECT invoice; `description` keeps the name as billed.
+  serviceId         String?
   quantity          Int      @default(1)
   unitPricePaisa    BigInt
   discountPaisa     BigInt   @default(0)
@@ -982,21 +1034,89 @@ model InvoiceLine {
 }
 
 model Payment {
-  id             String        @id @default(cuid())
-  receiptNo      String        @unique
-  invoiceId      String
-  amountPaisa    BigInt
-  method         PaymentMethod
-  reference      String?
-  bankAccountId  String?
-  cashierId      String
-  idempotencyKey String        @unique
-  receivedAt     DateTime      @default(now())
+  id                String        @id @default(cuid())
+  receiptNo         String        @unique
+  invoiceId         String
+  /// Negative on a reversal row (invoice cancelled): payments are append-only, so money is undone by a new row.
+  amountPaisa       BigInt
+  method            PaymentMethod
+  /// The mode chosen at the desk; `method` is what it settles as. Null on payments from before modes existed.
+  paymentModeId     String?
+  reference         String?
+  bankAccountId     String?
+  /// The payment this row undoes (D-084).
+  reversesPaymentId String?       @unique
+  note              String?       @db.Text
+  cashierId         String
+  idempotencyKey    String        @unique
+  receivedAt        DateTime      @default(now())
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id])
+  paymentMode PaymentMode? @relation(fields: [paymentModeId], references: [id], onDelete: Restrict)
 
   @@index([receivedAt])
+  @@index([invoiceId])
+  @@index([paymentModeId])
   @@map("payments")
+}
+
+/// Admin-managed ways to pay. Each settles as one fixed method, which drives the ledger account, the bank account /
+/// reference rules and the Cash Closing columns (D-084). Turned off, never deleted.
+model PaymentMode {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  method      PaymentMethod
+  active      Boolean       @default(true)
+  sortOrder   Int           @default(0)
+  createdById String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  payments Payment[]
+
+  @@map("payment_modes")
+}
+
+/// Groups services on the invoice form (consultation, procedure, injection...). Turned off, never deleted (D-084).
+model InvoiceCategory {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  services Service[]
+
+  @@map("invoice_categories")
+}
+
+/// Append-only record of a patient's advance. Balance = SUM(amountPaisa); it is never stored (D-084).
+model PatientAdvanceEntry {
+  id             String           @id @default(cuid())
+  patientId      String
+  type           AdvanceEntryType
+  amountPaisa    BigInt // signed: + money held for the patient, - money used or returned
+  receiptNo      String?          @unique
+  /// How the money came in or went out (RECEIPT, REFUND). Null for APPLIED and CANCEL_CREDIT: no cash moved.
+  method         PaymentMethod?
+  paymentModeId  String?
+  reference      String?
+  bankAccountId  String?
+  invoiceId      String?
+  paymentId      String?
+  note           String?          @db.Text
+  actorId        String
+  idempotencyKey String           @unique
+  createdAt      DateTime         @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  @@index([patientId, createdAt])
+  @@index([createdAt])
+  @@index([invoiceId])
+  @@map("patient_advance_entries")
 }
 
 model BankAccount {

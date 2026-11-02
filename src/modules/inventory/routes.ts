@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { PaymentMethod } from '@prisma/client';
+import { MONEY_METHODS } from '../../lib/paymentMethods';
 import { prisma } from '../../lib/prisma';
 import { idParam, route } from '../../middleware/route';
 import * as cash from '../cash/service';
@@ -92,7 +92,7 @@ inventoryRouter.get('/vendors/:id/ledger', route({ permission: ['stock:manage', 
 inventoryRouter.post(
   '/vendors/:id/payments',
   route(
-    { permission: 'stock:manage', params: idParam, idempotent: true, status: 201, body: z.object({ amountPaisa: z.number().int().positive(), method: z.nativeEnum(PaymentMethod), reference: z.string().max(100).optional(), bankAccountId: id.optional(), note: z.string().max(500).optional() }) },
+    { permission: 'stock:manage', params: idParam, idempotent: true, status: 201, body: z.object({ amountPaisa: z.number().int().positive(), method: z.enum(MONEY_METHODS), reference: z.string().max(100).optional(), bankAccountId: id.optional(), note: z.string().max(500).optional() }) },
     async ({ actor, params, body, idempotencyKey }) => purchasing.payVendor(actor, params.id, body, idempotencyKey!),
   ),
 );

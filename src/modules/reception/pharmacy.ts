@@ -1,4 +1,4 @@
-import { prisma, type Tx } from '../../lib/prisma';
+import { moneyTx, prisma, type Tx } from '../../lib/prisma';
 import { ConflictError, LockedError, NotFoundError, ValidationError } from '../../lib/errors';
 import { audit, type Actor } from '../../services/audit';
 import { getSetting } from '../../services/settings';
@@ -57,7 +57,7 @@ export async function addLine(actor: Actor, invoiceId: string, input: PharmacyLi
   if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new ValidationError('Quantity sahi likhein.');
   if (!Number.isSafeInteger(input.unitPricePaisa) || input.unitPricePaisa < 0) throw new ValidationError('Price sahi likhein.');
   const key = `sale:${idempotencyKey}`;
-  return prisma.$transaction(async (tx) => {
+  return moneyTx(async (tx) => {
     const replay = await tx.stockTransaction.findFirst({ where: { idempotencyKey: { startsWith: `${key}:` } }, select: { invoiceLineId: true } });
     if (replay?.invoiceLineId) return { line: await tx.invoiceLine.findUniqueOrThrow({ where: { id: replay.invoiceLineId } }), replayed: true };
 
@@ -108,7 +108,7 @@ export async function addLine(actor: Actor, invoiceId: string, input: PharmacyLi
 /** Cancel a pharmacy line added by mistake: a reversal line, stock back, totals down. Not after it is paid for. */
 export async function reverseLine(actor: Actor, invoiceId: string, lineId: string, reason: string) {
   if (!reason.trim()) throw new ValidationError('Wajah likhein.');
-  return prisma.$transaction(async (tx) => {
+  return moneyTx(async (tx) => {
     const inv = await lockOpenInvoice(tx, invoiceId);
     const line = await tx.invoiceLine.findUnique({ where: { id: lineId } });
     if (!line || line.invoiceId !== invoiceId || !line.stockItemId || line.reversesLineId) throw new NotFoundError('Pharmacy line');

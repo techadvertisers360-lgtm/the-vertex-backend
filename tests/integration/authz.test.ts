@@ -20,6 +20,8 @@ const RAW_ALLOWED: Record<string, string> = {
   'GET /files/:id/content': 'checks files:read itself, then the same record-scope rule as /files/:id/url',
   'POST /me/password': 'own password only; needs the current password',
   'POST /me/stop-view-as': 'leaves developer view-as for the own session only (no-op otherwise)',
+  'GET /geofence/status': 'every signed-in user: reads only the own on-site requirement and claim (D-062)',
+  'POST /geofence/check': 'every signed-in user: checks the own session location; reachable without a claim (D-062)',
 };
 
 interface RouteInfo {

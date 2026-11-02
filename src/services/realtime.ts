@@ -15,7 +15,8 @@ export type RealtimeEventName =
   | 'session:revoked'
   | 'appointment:updated'
   | 'queue:changed'
-  | 'tracker:changed';
+  | 'tracker:changed'
+  | 'invoices:changed';
 
 export async function publish(db: Db, rooms: string[], event: RealtimeEventName, payload: Record<string, unknown> = {}): Promise<void> {
   const unique = [...new Set(rooms)];

@@ -84,7 +84,7 @@ describe('D-055 — stock CSV import', () => {
     const r = await dev.post('/api/developer/stock-import', { kind: 'PHARMACY', csv: `${PHARM_HEADER}\nB,Cream ${t},,1,1,tube,1,,,`, dryRun: true });
     expect(r.body.errors[0].message).toContain('Procedure product');
     const bad = await dev.post('/api/developer/stock-import', { kind: 'PHARMACY', csv: 'Name,Qty\nA,1', dryRun: true });
-    expect(bad.status).toBe(400);
+    expect(bad.status).toBe(422);
     expect(bad.body.error?.message ?? JSON.stringify(bad.body)).toContain('Quantity');
     for (const role of ['MANAGER', 'RECEPTIONIST', 'MD'] as const) {
       expect((await call((await agentFor(role)).agent).post('/api/developer/stock-import', { kind: 'PHARMACY', csv: PHARM_HEADER, dryRun: true })).status).toBe(403);

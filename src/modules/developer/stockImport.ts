@@ -1,3 +1,4 @@
+import { invoiceCategoryFor } from '../../services/invoiceCategories';
 import type { Prisma, StockItem } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { ValidationError } from '../../lib/errors';
@@ -352,7 +353,11 @@ async function importServices(actor: Actor, input: { csv: string; fileName?: str
   if (input.dryRun || (!creates.length && !updates.length)) return result;
 
   await prisma.$transaction(async (tx) => {
-    if (creates.length) await tx.service.createMany({ data: creates, skipDuplicates: true });
+    if (creates.length) {
+      const withCategory = [];
+      for (const c of creates) withCategory.push({ ...c, invoiceCategoryId: await invoiceCategoryFor(tx, c.category, c.type) });
+      await tx.service.createMany({ data: withCategory, skipDuplicates: true });
+    }
     await audit(tx, actor, {
       action: 'SERVICE_CSV_IMPORTED',
       recordType: 'Service',
@@ -363,7 +368,8 @@ async function importServices(actor: Actor, input: { csv: string; fileName?: str
     const chunk = updates.slice(i, i + UPDATE_CHUNK);
     await prisma.$transaction(async (tx) => {
       for (const u of chunk) {
-        const after = await tx.service.update({ where: { id: u.before.id }, data: u.data });
+        const category = (u.data as { category?: string | null }).category;
+        const after = await tx.service.update({ where: { id: u.before.id }, data: { ...u.data, ...(category !== undefined ? { invoiceCategory: { connect: { id: await invoiceCategoryFor(tx, category, u.before.type) } } } : {}) } });
         await audit(tx, actor, { action: 'SERVICE_UPDATED', recordType: 'Service', recordId: after.id, before: u.before, after, reason: `CSV import${input.fileName ? ` (${input.fileName})` : ''}` });
       }
     });

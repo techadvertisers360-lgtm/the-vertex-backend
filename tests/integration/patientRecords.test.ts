@@ -50,7 +50,7 @@ describe('D-078 — patient records', () => {
   });
 
   it('Manager corrects a wrong entry with a reason (audited); a phone used by someone else needs confirmation; Reception cannot', async () => {
-    expect((await manager.patch(`/api/patient-records/${patientId}`, { name: 'X Y', reason: '' })).status).toBe(400);
+    expect((await manager.patch(`/api/patient-records/${patientId}`, { name: 'X Y', reason: '' })).status).toBe(422);
     const ok = await manager.patch(`/api/patient-records/${patientId}`, { name: `${name} Khan`, ageYears: 41, gender: 'female', reason: 'Reception ne naam adhoora likha' });
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ok.body).toMatchObject({ name: `${name} Khan`, ageYears: 41, gender: 'female' });

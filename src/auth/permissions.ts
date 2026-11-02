@@ -64,6 +64,19 @@ export const PERMISSIONS = [
   'audit:search',
   'settings:manage',
   'users:manage',
+  // invoice module (D-084): change who may do what in INVOICE_DESK / INVOICE_MANAGER / INVOICE_OWNER below
+  'invoice:view', // list and search, one invoice
+  'invoice:create', // direct invoice, patient search / add, form options
+  'invoice:pay', // later payments, use an advance
+  'invoice:advance', // record advance payments
+  'invoice:print',
+  'invoice:view_discount', // discount columns and totals in the list and on an invoice
+  'invoice:totals', // rupee totals of the filtered rows
+  'invoice:export', // Excel / PDF of the filtered rows
+  'invoice:cancel', // cancel an invoice, refund an advance
+  'invoice:export_all', // every invoice as Excel / CSV
+  'invoice:settings', // invoice Settings, Payment Modes, Invoice Categories
+  'invoice:audit', // invoice audit history
   'messages:log', // WhatsApp message log, retry, opt-out (spec §20)
   // MD
   'md:dashboard',
@@ -81,6 +94,11 @@ export const PERMISSIONS = [
 export type Permission = (typeof PERMISSIONS)[number];
 
 const SHARED: Permission[] = ['notifications:own', 'attendance:own', 'requests:own', 'files:read'];
+
+/** Invoice permissions by level. Moving a permission between these lists is all it takes to change who can do it. */
+const INVOICE_DESK: Permission[] = ['invoice:view', 'invoice:create', 'invoice:pay', 'invoice:advance', 'invoice:print', 'invoice:view_discount'];
+const INVOICE_MANAGER: Permission[] = [...INVOICE_DESK, 'invoice:totals', 'invoice:export', 'invoice:cancel'];
+const INVOICE_OWNER: Permission[] = [...INVOICE_MANAGER, 'invoice:export_all', 'invoice:settings', 'invoice:audit'];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   LEAD_MEMBER: [
@@ -109,6 +127,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'services:reception',
     'complaints:patient',
     'offers:read',
+    ...INVOICE_DESK,
   ],
   DOCTOR: [
     ...SHARED,
@@ -150,6 +169,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'offers:read',
     'leads:reports',
     'messages:log',
+    ...INVOICE_MANAGER,
   ],
   MD: [
     ...SHARED,
@@ -167,6 +187,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'users:manage',
     'appointments:read',
     'offers:read',
+    ...INVOICE_OWNER,
   ],
   MARKETING_DIRECTOR: [
     ...SHARED,

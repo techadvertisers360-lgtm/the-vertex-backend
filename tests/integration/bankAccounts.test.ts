@@ -9,7 +9,7 @@ describe('D-080 — bank accounts', () => {
     const rec = call((await agentFor('RECEPTIONIST')).agent);
     const title = `Vertex ${uid()}`;
 
-    expect((await manager.post('/api/bank-accounts', { name: title, bankName: 'Meezan', accountNo: '12' })).status).toBe(400);
+    expect((await manager.post('/api/bank-accounts', { name: title, bankName: 'Meezan', accountNo: '12' })).status).toBe(422);
     const created = await manager.post('/api/bank-accounts', { name: title, bankName: 'Meezan Bank', accountNo: 'PK36MEZN0001' });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
     const id = created.body.id;
