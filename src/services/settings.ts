@@ -38,7 +38,7 @@ export const SETTING_DEFS = {
   'invoice.taxEnabled': { schema: z.boolean(), default: false, placeholder: true, description: 'Tax on / off for direct invoices (D-084). Accountant to confirm. §26 #8' },
   'invoice.numberFormat': { schema: z.string().min(5).max(40).regex(/\{SEQ\}/, 'Format must contain {SEQ}'), default: '{PREFIX}-{YYYY}-{SEQ}', placeholder: true, description: 'Invoice number format: {PREFIX}, {YYYY}, {YY}, {SEQ} (D-084). §26 #8' },
   'clinic.name': { schema: z.string().trim().min(1).max(120), default: 'The Vertex Health', placeholder: true, description: 'Clinic name on printed invoices (D-084).' },
-  'clinic.logoAttachmentId': { schema: z.string().min(1).max(64).nullable(), default: null, placeholder: true, description: 'Clinic logo on printed invoices (D-084).' },
+  'clinic.logoDataUrl': { schema: z.string().max(300_000).regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/, 'Logo must be a PNG, JPEG or WebP image').nullable(), default: null, placeholder: true, description: 'Clinic logo on printed invoices, stored as a small image (D-084).' },
   'notify.quietHoursStart': { schema: hhmm.nullable(), default: null, placeholder: true, description: 'Patient message quiet hours start (null = none). §26 #9' },
   'notify.quietHoursEnd': { schema: hhmm.nullable(), default: null, placeholder: true, description: 'Patient message quiet hours end. §26 #9' },
   'notify.maxRetries': { schema: z.number().int().min(0).max(20), default: 5, placeholder: true, description: 'Message send retries before terminal failure. §26 #9' },
@@ -74,7 +74,7 @@ export const SETTING_DEFS = {
 export type SettingKey = keyof typeof SETTING_DEFS;
 
 /** MD only (D-084): hidden from the general Settings screen of other roles and refused there on the server. */
-export const invoiceSettingKeys: readonly SettingKey[] = ['invoice.numberPrefix', 'invoice.numberFormat', 'invoice.taxEnabled', 'invoice.taxBasisPoints', 'clinic.name', 'clinic.logoAttachmentId'];
+export const invoiceSettingKeys: readonly SettingKey[] = ['invoice.numberPrefix', 'invoice.numberFormat', 'invoice.taxEnabled', 'invoice.taxBasisPoints', 'clinic.name', 'clinic.logoDataUrl'];
 export type SettingValue<K extends SettingKey> = z.infer<(typeof SETTING_DEFS)[K]['schema']>;
 
 const cache = new Map<string, { v: unknown; at: number }>();

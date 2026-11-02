@@ -593,8 +593,8 @@ export async function invoiceDetail(invoiceId: string, role?: Role) {
  * role seeing discounts altogether, remove its `invoice:print` as well as `invoice:view_discount`.
  */
 export async function invoicePrint(invoiceId: string) {
-  const [invoice, clinicName, logoAttachmentId] = await Promise.all([invoiceDetail(invoiceId), getSetting('clinic.name'), getSetting('clinic.logoAttachmentId')]);
-  return { invoice, clinic: { name: clinicName, logoAttachmentId } };
+  const [invoice, clinicName, logoDataUrl] = await Promise.all([invoiceDetail(invoiceId), getSetting('clinic.name'), getSetting('clinic.logoDataUrl')]);
+  return { invoice, clinic: { name: clinicName, logoDataUrl } };
 }
 
 const AUDIT_ACTIONS = ['INVOICE_OPENED', 'INVOICE_CREATED', 'INVOICE_CLOSED', 'INVOICE_CANCELLED', 'PAYMENT_RECEIVED', 'ADVANCE_RECEIVED', 'ADVANCE_APPLIED', 'ADVANCE_REFUNDED', 'PHARMACY_SALE', 'PHARMACY_SALE_REVERSED', 'COUNTER_SALE', 'INVOICES_EXPORTED', 'PAYMENT_MODE_CHANGED', 'INVOICE_CATEGORY_CHANGED', 'INVOICE_SETTINGS_CHANGED'];

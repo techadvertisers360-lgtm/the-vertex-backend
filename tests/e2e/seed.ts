@@ -41,6 +41,7 @@ async function main() {
   const lead = await user('LEAD_MEMBER', 'Lead Member');
   await prisma.user.update({ where: { id: lead.id }, data: { memberCode: `LM-${tag.slice(-6).toUpperCase()}` } });
   const reception = await user('RECEPTIONIST', 'Receptionist');
+  const manager = await user('MANAGER', 'Manager');
   const doctor = await user('DOCTOR', 'Dr E2E');
   await prisma.user.update({ where: { id: doctor.id }, data: { phone: `92300${String(Date.now()).slice(-7)}` } });
   for (let weekday = 1; weekday <= 7; weekday++) {
@@ -72,6 +73,8 @@ async function main() {
     password: PASSWORD,
     lead: { email: lead.email, name: lead.displayName },
     reception: { email: reception.email, name: reception.displayName },
+    manager: { email: manager.email, name: manager.displayName },
+    md: { email: admin.email, name: admin.displayName },
     doctor: { email: doctor.email, name: doctor.displayName },
     assistant: { email: assistant.email, name: assistant.displayName },
     leadId: leadRow.id,

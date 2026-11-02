@@ -171,15 +171,15 @@ invoicesRouter.put(
 );
 
 async function currentSettings() {
-  const [numberPrefix, numberFormat, taxEnabled, taxBasisPoints, clinicName, logoAttachmentId] = await Promise.all([
+  const [numberPrefix, numberFormat, taxEnabled, taxBasisPoints, clinicName, logoDataUrl] = await Promise.all([
     getSetting('invoice.numberPrefix'),
     getSetting('invoice.numberFormat'),
     getSetting('invoice.taxEnabled'),
     getSetting('invoice.taxBasisPoints'),
     getSetting('clinic.name'),
-    getSetting('clinic.logoAttachmentId'),
+    getSetting('clinic.logoDataUrl'),
   ]);
-  return { numberPrefix, numberFormat, taxEnabled, taxBasisPoints, clinicName, logoAttachmentId, numberExample: renderInvoiceNumber(numberFormat, { prefix: numberPrefix, year: new Date().getUTCFullYear(), seq: 1 }) };
+  return { numberPrefix, numberFormat, taxEnabled, taxBasisPoints, clinicName, logoDataUrl, numberExample: renderInvoiceNumber(numberFormat, { prefix: numberPrefix, year: new Date().getUTCFullYear(), seq: 1 }) };
 }
 
 invoicesRouter.get('/settings', route({ permission: 'invoice:settings' }, async () => currentSettings()));
@@ -195,7 +195,7 @@ invoicesRouter.put(
         taxEnabled: z.boolean().optional(),
         taxBasisPoints: z.number().int().min(0).max(10_000).optional(),
         clinicName: z.string().optional(),
-        logoAttachmentId: id.nullable().optional(),
+        logoDataUrl: z.string().nullable().optional(),
       }),
     },
     async ({ actor, body }) => {
@@ -205,7 +205,7 @@ invoicesRouter.put(
         ['invoice.taxEnabled', body.taxEnabled],
         ['invoice.taxBasisPoints', body.taxBasisPoints],
         ['clinic.name', body.clinicName],
-        ['clinic.logoAttachmentId', body.logoAttachmentId],
+        ['clinic.logoDataUrl', body.logoDataUrl],
       ] as const;
       for (const [key, value] of pairs) if (value !== undefined && invoiceSettingKeys.includes(key)) await updateSetting(actor, key, value, true);
       return currentSettings();
