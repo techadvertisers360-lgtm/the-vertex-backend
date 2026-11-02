@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { normalizePhone } from '../../src/lib/phone';
 import { agentFor, call, makeUser, prisma, uid, uniquePhone } from './helpers';
 
-/** D-078 — Patient Records: Manager and MD see every patient and the full history; nobody else. */
+/** D-078 / D-087 — Patient Records: Manager, MD and Reception see every patient and the full history; only Manager / MD correct details. */
 let manager: ReturnType<typeof call>;
 let md: ReturnType<typeof call>;
 let patientId: string;
@@ -40,9 +40,34 @@ describe('D-078 — patient records', () => {
     expect(await prisma.auditEvent.count({ where: { action: 'PATIENT_RECORD_VIEWED', recordId: patientId } })).toBeGreaterThan(0);
   });
 
-  it('MD can open it; Reception, Doctor and Office Boy cannot', async () => {
+  it('D-087: Reception lists every patient, opens the full history (audited) and its documents, but nothing else', async () => {
+    const r = await agentFor('RECEPTIONIST');
+    const rec = call(r.agent);
+    const list = await rec.get(`/api/patient-records?q=${encodeURIComponent(name)}`);
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    expect(list.body.items).toEqual([expect.objectContaining({ id: patientId, visits: 1 })]);
+
+    const assistant = await makeUser('ASSISTANT');
+    const doctor = await makeUser('DOCTOR');
+    const task = await prisma.procedureTask.create({ data: { planItemId: `fake-${uid()}`, patientId, doctorId: doctor.id, assistantId: assistant.id, status: 'COMPLETED' } });
+    const file = (fileRoute: 'beforePhoto' | 'roomCleanPhoto') =>
+      prisma.attachment.create({ data: { fileKey: `rec_${uid()}`, route: fileRoute, fileName: 'x.jpg', mime: 'image/jpeg', size: 100, isPrivate: true, uploadedById: assistant.id, recordType: 'ProcedureTask', recordId: task.id } });
+    const before = await file('beforePhoto');
+    const roomPhoto = await file('roomCleanPhoto');
+
+    const history = await rec.get(`/api/patient-records/${patientId}`);
+    expect(history.status, JSON.stringify(history.body)).toBe(200);
+    expect(history.body.visits).toHaveLength(2);
+    expect(history.body.otherProcedures[0].documents.map((d: { id: string }) => d.id)).toEqual([before.id]);
+    expect(await prisma.auditEvent.count({ where: { action: 'PATIENT_RECORD_VIEWED', recordId: patientId, actorId: r.user.id } })).toBe(1);
+
+    expect((await rec.get(`/api/files/${before.id}/url`)).status).toBe(200);
+    expect((await rec.get(`/api/files/${roomPhoto.id}/url`)).status).toBe(403);
+  });
+
+  it('MD can open it; Doctor and Office Boy cannot', async () => {
     expect((await md.get(`/api/patient-records/${patientId}`)).status).toBe(200);
-    for (const role of ['RECEPTIONIST', 'DOCTOR', 'OFFICE_BOY'] as const) {
+    for (const role of ['DOCTOR', 'OFFICE_BOY'] as const) {
       const c = call((await agentFor(role)).agent);
       expect((await c.get('/api/patient-records')).status).toBe(403);
       expect((await c.get(`/api/patient-records/${patientId}`)).status).toBe(403);

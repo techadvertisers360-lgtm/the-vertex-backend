@@ -28,7 +28,8 @@ export const PERMISSIONS = [
   'patients:search',
   'patients:create',
   'bank:manage', // Manager / MD: clinic bank accounts for online payments (D-080)
-  'patients:records', // Manager / MD: every patient's full history, view only (D-078)
+  'patients:records', // Manager / MD: every patient's full history, view only (D-078), and correct details (D-079)
+  'patients:history', // Reception: read the patient list and full history, no corrections (D-087)
   'reception:checkin',
   'reception:vitals',
   'reception:billing',
@@ -114,6 +115,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     ...SHARED,
     'patients:search',
     'patients:create',
+    'patients:history',
     'appointments:book',
     'appointments:read',
     'appointments:reschedule_request',

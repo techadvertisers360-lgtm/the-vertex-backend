@@ -185,6 +185,8 @@ export async function authorizeRead(actor: Actor, att: Attachment, db: Db = pris
       const task = await db.procedureTask.findUnique({ where: { id }, select: { assistantId: true, patientId: true, status: true } });
       if (!task) return no('missing');
       if (r === 'MANAGER' || r === 'MD') return;
+      // Reception opens what the patient's history shows (D-087); other procedure files stay closed.
+      if (r === 'RECEPTIONIST' && ['consentForm', 'beforePhoto', 'afterPhoto', 'itemsUsedEvidence'].includes(att.route)) return;
       if (r === 'ASSISTANT' && task.assistantId === actor.id && task.status !== 'COMPLETED') return;
       if (r === 'DOCTOR' && (await doctorCanSeePatient(actor.id, task.patientId, db))) return;
       return no('procedure_scope');
