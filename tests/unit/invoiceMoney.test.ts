@@ -9,15 +9,15 @@ describe('invoice totals: Total = Sub Total - Discount + Tax', () => {
     expect(invoiceTotals([line(1500), line(2000, 2)], 50_000n, null)).toEqual({ subtotal: 550_000n, discount: 50_000n, tax: 0n, taxRateBp: null, total: 500_000n });
   });
 
-  it('calculates tax after the discount', () => {
-    const t = invoiceTotals([line(10_000)], 100_000n, 1600); // 16% of Rs 9,000
-    expect(t).toMatchObject({ subtotal: 1_000_000n, discount: 100_000n, tax: 144_000n, taxRateBp: 1600, total: 1_044_000n });
-    expect(t.total).toBe(t.subtotal - t.discount + t.tax);
+  it('D-088: tax sits inside the total after the discount, and the amount to pay does not go up', () => {
+    const t = invoiceTotals([line(10_000)], 100_000n, 1600); // Rs 9,000 × 16 / 116
+    expect(t).toMatchObject({ subtotal: 1_000_000n, discount: 100_000n, tax: 124_138n, taxRateBp: 1600, total: 900_000n });
+    expect(t.total).toBe(t.subtotal - t.discount);
   });
 
   it('rounds tax to the nearest paisa and stays exact on values floats get wrong', () => {
-    expect(invoiceTotals([{ unitPricePaisa: 3n, quantity: 1 }], 0n, 5000).tax).toBe(2n); // 1.5 rounds up
-    expect(invoiceTotals([{ unitPricePaisa: 1n, quantity: 1 }], 0n, 4900).tax).toBe(0n); // 0.49 rounds down
+    expect(invoiceTotals([{ unitPricePaisa: 2n, quantity: 1 }], 0n, 5000).tax).toBe(1n); // 0.67 rounds up
+    expect(invoiceTotals([{ unitPricePaisa: 1n, quantity: 1 }], 0n, 4900).tax).toBe(0n); // 0.33 rounds down
     expect(invoiceTotals([{ unitPricePaisa: 10n, quantity: 1 }, { unitPricePaisa: 20n, quantity: 1 }], 0n, null).total).toBe(30n);
     expect(invoiceTotals([{ unitPricePaisa: 9_007_199_254_740_991n, quantity: 2 }], 0n, null).total).toBe(18_014_398_509_481_982n);
   });

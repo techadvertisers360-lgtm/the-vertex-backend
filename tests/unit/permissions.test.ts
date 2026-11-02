@@ -62,7 +62,7 @@ describe('settings registry (spec §26)', () => {
     expect(SETTING_DEFS['stock.managerApprovalLimitPaisa'].placeholder).toBe(false);
     expect(SETTING_DEFS['scheduling.consultBufferMin'].default).toBe(10);
     expect(SETTING_DEFS['scheduling.procedureBufferMin'].default).toBe(20);
-    expect(SETTING_DEFS['sla.consentMinutes'].default).toBe(8);
+    expect(SETTING_DEFS['sla.consentMinutes'].default).toBe(7);
     expect(SETTING_DEFS['sla.roomCleanMinutes'].default).toBe(7);
     expect(SETTING_DEFS['scheduling.consultDurationMin'].placeholder).toBe(true);
     expect(SETTING_DEFS['whatsapp.provider'].placeholder).toBe(true);

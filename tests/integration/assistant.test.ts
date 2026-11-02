@@ -130,7 +130,7 @@ describe('§9 — Reception assigns a free Assistant + procedure room for same-d
 });
 
 describe('§25 #15 — consent gate and 8-minute alert', () => {
-  it('start is refused without consent; Manager is alerted once after 8 minutes', async () => {
+  it('start is refused without consent; Manager is alerted once after 7 minutes', async () => {
     const t = await assigned();
     const api = t.assistant.api;
     // another Assistant cannot see or act on it
@@ -144,9 +144,9 @@ describe('§25 #15 — consent gate and 8-minute alert', () => {
     expect(early.body.error.code).toBe('CONSENT_REQUIRED');
 
     const task = await prisma.procedureTask.findUniqueOrThrow({ where: { id: t.taskId } });
-    await runConsentAlerts(addMinutes(task.assignedAt!, 7));
+    await runConsentAlerts(addMinutes(task.assignedAt!, 6));
     expect((await prisma.procedureTask.findUniqueOrThrow({ where: { id: t.taskId } })).consentAlertAt).toBeNull();
-    await runConsentAlerts(addMinutes(task.assignedAt!, 9));
+    await runConsentAlerts(addMinutes(task.assignedAt!, 8));
     await runConsentAlerts(addMinutes(task.assignedAt!, 12));
     expect((await prisma.procedureTask.findUniqueOrThrow({ where: { id: t.taskId } })).consentAlertAt).not.toBeNull();
     expect(await prisma.notification.count({ where: { recordId: t.taskId, type: 'SLA_CONSENT', recipientId: managerId } })).toBe(1);

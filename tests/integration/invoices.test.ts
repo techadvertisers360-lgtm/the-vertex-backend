@@ -100,7 +100,7 @@ describe('creating a direct invoice', () => {
     expect((await md.put('/api/invoices/settings', { taxEnabled: true, taxBasisPoints: 1600 })).status).toBe(200);
     try {
       const taxed = await direct({ discountPaisa: 100_000 });
-      expect(taxed).toMatchObject({ subtotalPaisa: 1_000_000, discountPaisa: 100_000, taxPaisa: 144_000, taxRateBp: 1600, totalPaisa: 1_044_000, balancePaisa: 1_044_000 });
+      expect(taxed).toMatchObject({ subtotalPaisa: 1_000_000, discountPaisa: 100_000, taxPaisa: 124_138, taxRateBp: 1600, totalPaisa: 900_000, balancePaisa: 900_000 });
       expect(await direct({ applyTax: false })).toMatchObject({ taxPaisa: 0, taxRateBp: null, totalPaisa: 1_000_000 });
     } finally {
       await md.put('/api/invoices/settings', { taxEnabled: false, taxBasisPoints: 0 });

@@ -3,7 +3,7 @@ import { ValidationError } from '../../lib/errors';
 /**
  * Invoice arithmetic (D-084): integer paisa only, pure and unit-tested. The server is the only place these numbers
  * are worked out; a client never sends a total, tax or balance.
- *   Total = Sub Total - Discount + Tax        Balance = Total - Paid
+ *   Total = Sub Total - Discount (tax is inside the total, D-088)        Balance = Total - Paid
  */
 
 export interface LineAmount {
@@ -19,7 +19,7 @@ export interface InvoiceTotals {
   total: bigint;
 }
 
-/** Tax is calculated after the discount and rounded to the nearest paisa. A null or zero rate means no tax ("N/A"). */
+/** Tax is the part of the discounted total that is tax, rounded to the nearest paisa; the patient pays no more (D-088). A null or zero rate means no tax ("N/A"). */
 export function invoiceTotals(lines: LineAmount[], discount: bigint, taxRateBp: number | null): InvoiceTotals {
   if (!lines.length) throw new ValidationError('Kam az kam ek service add karein.');
   let subtotal = 0n;
@@ -31,9 +31,10 @@ export function invoiceTotals(lines: LineAmount[], discount: bigint, taxRateBp: 
   if (discount < 0n) throw new ValidationError('Discount sahi likhein.');
   if (discount > subtotal) throw new ValidationError('Discount total se zyada nahi ho sakta.');
   const rate = taxRateBp && taxRateBp > 0 ? taxRateBp : null;
-  const taxable = subtotal - discount;
-  const tax = rate ? (taxable * BigInt(rate) + 5_000n) / 10_000n : 0n;
-  return { subtotal, discount, tax, taxRateBp: rate, total: taxable + tax };
+  const total = subtotal - discount;
+  const divisor = BigInt(10_000 + (rate ?? 0));
+  const tax = rate ? (total * BigInt(rate) + divisor / 2n) / divisor : 0n;
+  return { subtotal, discount, tax, taxRateBp: rate, total };
 }
 
 /**

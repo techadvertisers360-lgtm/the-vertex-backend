@@ -58,7 +58,7 @@ export const SETTING_DEFS = {
   'officeBoy.photoRequiredOnIssue': { schema: z.boolean(), default: true, placeholder: false, description: 'A photo is required when an Office Boy round reports a problem (client confirmed 2026-10-18).' },
   'officeBoy.finalReportTime': { schema: hhmm, default: '21:40', placeholder: false, description: 'Final report time (spec §13: 9:40 PM).' },
   'retention.policy': { schema: z.string(), default: 'retain_all', placeholder: true, description: 'Clinical record/photo retention policy. §26 #12' },
-  'sla.consentMinutes': { schema: minutes.min(1), default: 8, placeholder: false, description: 'Consent missing alert after assignment (spec §12).' },
+  'sla.consentMinutes': { schema: minutes.min(1), default: 7, placeholder: false, description: 'Consent missing alert after assignment (client demo, D-088; spec §12 said 8).' },
   'procedure.autoSendToReceptionMinutes': { schema: minutes.min(1).max(30), default: 2, placeholder: false, description: 'Auto-send the patient to Reception this many minutes after items used if the Assistant has not pressed Send to Reception (client decision 2026-10-18, D-034).' },
   'sla.roomCleanMinutes': { schema: minutes.min(1), default: 7, placeholder: false, description: 'Room-clean overdue alert after procedure end (spec §12).' },
   'procedure.reminderDaysBefore': { schema: z.number().int().min(1).max(14), default: 2, placeholder: false, description: 'Procedure reminder lead time (spec §19).' },
