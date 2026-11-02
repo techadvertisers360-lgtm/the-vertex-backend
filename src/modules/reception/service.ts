@@ -1,6 +1,6 @@
 import type { AppointmentStatus, Prisma } from '@prisma/client';
 import type { MoneyMethod } from '../../lib/paymentMethods';
-import { addMoneyPayment, assertNotCancelled, checkMoneyDetails, moveInvoiceBalance } from '../../services/invoicePayments';
+import { addMoneyPayment, assertNotCancelled, checkMoneyDetails, moveInvoiceBalance, fileSlip } from '../../services/invoicePayments';
 import { invoiceSequenceName, renderInvoiceNumber } from '../invoices/money';
 import { moneyTx, prisma, type Tx } from '../../lib/prisma';
 import { ConflictError, LockedError, NotFoundError, ValidationError } from '../../lib/errors';
@@ -456,6 +456,7 @@ export async function invoiceDetail(invoiceId: string) {
     feedback,
     installments,
     bankAccounts: banks,
+    requireSlip: await getSetting('payment.requireSlip'),
     canClose: inv.status === 'OPEN' && blockers.length === 0 && decorated!.status === 'RECEPTION',
     closeBlockers: blockers,
   };
@@ -468,6 +469,7 @@ export interface PaymentInput {
   method: MoneyMethod;
   reference?: string;
   bankAccountId?: string;
+  slipAttachmentId?: string;
 }
 
 /**
@@ -487,6 +489,7 @@ export async function recordPayment(actor: Actor, invoiceId: string, p: PaymentI
     const inv = await tx.invoice.findUnique({ where: { id: invoiceId } });
     if (!inv) throw new NotFoundError('Invoice');
     assertNotCancelled(inv);
+    await fileSlip(tx, actor, p.method, p.slipAttachmentId, invoiceId);
     // A closed visit can still be paid while a balance remains, e.g. installments (D-084). The visit is not reopened.
     if (inv.status === 'CLOSED' && inv.balancePaisa <= 0n) throw new ConflictError('INVOICE_CLOSED', 'Invoice close ho chuki hai.');
     const appointmentId = visitOf(inv);

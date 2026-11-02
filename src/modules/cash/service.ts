@@ -19,6 +19,11 @@ export async function daySummary(date?: string) {
   const d = date ?? clinicDateStr(new Date());
   if (d > clinicDateStr(new Date())) throw new ValidationError('Aane wale din ka hisaab nahi.');
   const b = clinicDayBounds(d);
+  // Cash left at the desk by the last handover before this day, and today's handovers (client demo, D-091).
+  const [lastLeft, handoversToday] = await Promise.all([
+    prisma.cashHandover.findFirst({ where: { date: { lt: dateOnly(d) }, leftAtDeskPaisa: { not: null } }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], select: { leftAtDeskPaisa: true } }),
+    prisma.cashHandover.findMany({ where: { date: dateOnly(d) }, orderBy: { createdAt: 'asc' }, select: { id: true, amountPaisa: true, leftAtDeskPaisa: true, receivedAt: true, fromId: true, toId: true } }),
+  ]);
   const [allPayments, advances, invoices, cashLedger, supplierPayments, closing] = await Promise.all([
     prisma.payment.findMany({ where: { receivedAt: { gte: b.start, lt: b.end } }, select: { id: true, receiptNo: true, amountPaisa: true, method: true, reference: true, cashierId: true, receivedAt: true, invoiceId: true } }),
     advanceMoney(b),
@@ -36,7 +41,7 @@ export async function daySummary(date?: string) {
   const cashIn = sumBy(cashLedger.filter((l) => l.amountPaisa > 0n), (l) => l.amountPaisa);
   const cashOut = -sumBy(cashLedger.filter((l) => l.amountPaisa < 0n), (l) => l.amountPaisa);
   const [cashiers, vendors] = await Promise.all([
-    prisma.user.findMany({ where: { id: { in: [...new Set([...money.map((p) => p.cashierId), closing?.managerId, closing?.cashierId].filter((x): x is string => !!x))] } }, select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { id: { in: [...new Set([...money.map((p) => p.cashierId), closing?.managerId, closing?.cashierId, ...handoversToday.flatMap((h) => [h.fromId, h.toId])].filter((x): x is string => !!x))] } }, select: { id: true, displayName: true } }),
     prisma.vendor.findMany({ where: { id: { in: supplierPayments.map((s) => s.vendorId) } }, select: { id: true, name: true } }),
   ]);
   const name = (id: string | null | undefined) => (id ? (cashiers.find((u) => u.id === id)?.displayName ?? null) : null);
@@ -73,6 +78,8 @@ export async function daySummary(date?: string) {
       appliedPaisa: sumBy(allPayments.filter((p) => p.method === 'ADVANCE'), (p) => p.amountPaisa),
     },
     cash: { inPaisa: cashIn, outPaisa: cashOut, expectedPaisa: cashIn - cashOut },
+    leftFromYesterdayPaisa: lastLeft?.leftAtDeskPaisa ?? 0n,
+    handovers: handoversToday.map((h) => ({ ...h, from: name(h.fromId), to: name(h.toId) })),
     supplierPayments: supplierPayments.map((s) => ({ ...s, vendorName: vendors.find((v) => v.id === s.vendorId)?.name ?? null })),
     perCashier,
     payments: money.map((p) => {

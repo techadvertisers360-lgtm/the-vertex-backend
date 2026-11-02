@@ -2,7 +2,7 @@ import { Prisma, type ExpenseSource, type PackageKind, type Role } from '@prisma
 import { moneyTx, prisma } from '../../lib/prisma';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors';
 import { formatNumber, nextSequence } from '../../lib/misc';
-import { addMinutes, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, local } from '../../lib/time';
+import { addDaysStr, addMinutes, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, local } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
 import { getSetting } from '../../services/settings';
 import { notifyRoles, notifyUsers } from '../../services/notifications';
@@ -36,6 +36,23 @@ export async function clinicNow() {
     prisma.doctorAvailabilityException.findMany({ where: { kind: 'LEAVE', status: 'APPROVED', date: { gte: dateOnly(today) } }, orderBy: { date: 'asc' }, take: 20, select: { doctorId: true, date: true } }),
   ]);
   const name = (id: string) => doctors.find((d) => d.id === id)?.displayName ?? '';
+  // The next 7 days for each doctor: working hours, leave and bookings.
+  const days = Array.from({ length: 7 }, (_, i) => addDaysStr(today, i));
+  const lastDay = clinicDayBounds(days[6]!).end;
+  const [hours, booked, away] = await Promise.all([
+    prisma.doctorSchedule.findMany({ where: { doctorId: { in: doctors.map((d) => d.id) }, active: true, effectiveFrom: { lte: dateOnly(days[6]!) }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: dateOnly(today) } }] }, select: { doctorId: true, weekday: true, startMinute: true, endMinute: true } }),
+    prisma.appointment.findMany({ where: { doctorId: { in: doctors.map((d) => d.id) }, startAt: { gte: b.start, lt: lastDay }, status: { notIn: ['CANCELLED', 'RESCHEDULED'] } }, select: { doctorId: true, startAt: true } }),
+    prisma.doctorAvailabilityException.findMany({ where: { doctorId: { in: doctors.map((d) => d.id) }, kind: 'LEAVE', status: 'APPROVED', date: { gte: dateOnly(today), lte: dateOnly(days[6]!) } }, select: { doctorId: true, date: true } }),
+  ]);
+  const schedule = doctors.map((d) => ({
+    doctorId: d.id,
+    name: d.displayName,
+    days: days.map((date) => {
+      const weekday = local(clinicDayBounds(date).start).weekday;
+      const today_ = hours.filter((h) => h.doctorId === d.id && h.weekday === weekday);
+      return { date, leave: away.some((a) => a.doctorId === d.id && dateOnlyStr(a.date) === date), startMinute: today_.length ? Math.min(...today_.map((h) => h.startMinute)) : null, endMinute: today_.length ? Math.max(...today_.map((h) => h.endMinute)) : null, booked: booked.filter((a) => a.doctorId === d.id && clinicDateStr(a.startAt) === date).length };
+    }),
+  }));
   return {
     staff: staff.map((s) => {
       const a = attendance.find((x) => x.userId === s.id);
@@ -47,15 +64,17 @@ export async function clinicNow() {
     }),
     patients: inClinic.map((a) => ({ id: a.id, name: a.patient.name, status: a.status, doctor: a.doctorId ? name(a.doctorId) : null, startAt: a.startAt })),
     leaves: leaves.map((l) => ({ doctor: name(l.doctorId), date: dateOnlyStr(l.date) })),
+    schedule,
   };
 }
 
 // ───────────── Treatment plans ─────────────
 
-export async function openPlans(q?: string) {
+/** `doctorId`: a Doctor sees only their own plans (spec §4 lock 7). */
+export async function openPlans(q?: string, doctorId?: string) {
   const text = q?.trim();
   const matching = text ? await prisma.patient.findMany({ where: { name: { contains: text } }, select: { id: true }, take: 100 }) : null;
-  const plans = await prisma.treatmentPlan.findMany({ where: matching ? { patientId: { in: matching.map((p) => p.id) } } : {}, orderBy: { createdAt: 'desc' }, take: 200, select: { id: true, doctorId: true, patientId: true, currentVersionNo: true } });
+  const plans = await prisma.treatmentPlan.findMany({ where: { ...(matching ? { patientId: { in: matching.map((p) => p.id) } } : {}), ...(doctorId ? { doctorId } : {}) }, orderBy: { createdAt: 'desc' }, take: 200, select: { id: true, doctorId: true, patientId: true, currentVersionNo: true } });
   const [versions, patients] = await Promise.all([
     prisma.treatmentPlanVersion.findMany({ where: { OR: plans.map((p) => ({ planId: p.id, versionNo: p.currentVersionNo })) }, select: { planId: true, items: { where: { status: { in: ['PLANNED', 'SCHEDULED'] } }, orderBy: { scheduledStart: 'asc' }, select: { procedureName: true, sessionNumber: true, scheduledStart: true } } } }),
     prisma.patient.findMany({ where: { id: { in: plans.map((p) => p.patientId) } }, select: { id: true, name: true, phone: true } }),
@@ -329,9 +348,13 @@ export async function dataCheck() {
   const stock = await prisma.stockTransaction.groupBy({ by: ['itemId'], _sum: { quantity: true } });
   const negative = stock.filter((s) => (s._sum.quantity ?? 0) < 0);
   if (negative.length) {
-    const items = await prisma.stockItem.findMany({ where: { id: { in: negative.map((n) => n.itemId) } }, select: { id: true, name: true } });
-    for (const n of negative) add('Negative stock', items.find((i) => i.id === n.itemId)?.name ?? n.itemId, `Quantity ${n._sum.quantity}`);
+    const items = await prisma.stockItem.findMany({ where: { id: { in: negative.map((n) => n.itemId) } }, select: { id: true, name: true, needsDetails: true } });
+    for (const n of negative) {
+      const item = items.find((i) => i.id === n.itemId);
+      if (!item?.needsDetails) add('Negative stock', item?.name ?? n.itemId, `Quantity ${n._sum.quantity}`);
+    }
   }
+  for (const i of await prisma.stockItem.findMany({ where: { needsDetails: true }, select: { name: true } })) add('New item waiting for details', i.name, 'Cost aur details baqi hain');
   const doubled = await prisma.$queryRaw<{ description: string; n: bigint }[]>`SELECT description, COUNT(*) AS n FROM expenses GROUP BY date, description, amountPaisa HAVING n > 1 LIMIT 50`;
   for (const d of doubled) add('Double entry', d.description, `${d.n} same expenses`);
   return { checkedInvoices: invoices.length, problems };

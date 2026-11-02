@@ -2,6 +2,7 @@ import type { ProcedureStep, ProcedureTask, UploadRoute } from '@prisma/client';
 import { prisma, type Tx } from '../../lib/prisma';
 import { ConflictError, LockedError, NotFoundError, ValidationError } from '../../lib/errors';
 import { addDaysStr, addMinutes, clinicDate, clinicDateStr, clinicDayBounds, formatClinic, overlaps } from '../../lib/time';
+import { nextItemCodes } from '../../services/stock';
 import { audit, systemActor, type Actor } from '../../services/audit';
 import { transitionAppointment } from '../../services/appointmentStatus';
 import { notifyRoles, notifyUsers } from '../../services/notifications';
@@ -419,6 +420,26 @@ export async function finishProcedure(actor: Actor, taskId: string) {
     await tx.roomReservation.updateMany({ where: { procedureTaskId: t.id, status: 'ACTIVE' }, data: { status: 'AWAITING_CLEAN' } });
     await audit(tx, actor, { action: 'PROCEDURE_FINISHED', recordType: 'ProcedureTask', recordId: t.id });
     return r;
+  });
+}
+
+/**
+ * An item that is not in the list, used during the procedure (client demo, D-091). The photo is required. The stock
+ * is written as used straight away; Manager, MD and Hamza are told, so its cost and details can be added.
+ */
+export async function addNewItemUsed(actor: Actor, taskId: string, input: { name: string; quantity: number; evidenceAttachmentId: string }) {
+  const name = input.name.trim().replace(/\s+/g, ' ');
+  if (name.length < 2) throw new ValidationError('Item ka naam likhein.');
+  return withTask(actor, taskId, async (tx, t) => {
+    if (t.currentStep !== 'ITEMS_USED') throw new ConflictError('WRONG_STEP', 'Yeh item sirf "Items used" step par add ho sakta hai.');
+    await requireAttachment(tx, t.id, input.evidenceAttachmentId, 'itemsUsedEvidence');
+    if (await tx.stockItem.findFirst({ where: { name }, select: { id: true } })) throw new ConflictError('ITEM_EXISTS', 'Yeh item list mein pehle se hai. List se chunein.');
+    const [code] = await nextItemCodes(tx);
+    const item = await tx.stockItem.create({ data: { name, kind: 'PROCEDURE', category: 'Procedure', baseUnit: 'piece', minQty: 0, code, needsDetails: true } });
+    await tx.stockTransaction.create({ data: { itemId: item.id, type: 'USAGE', quantity: -input.quantity, procedureTaskId: t.id, actorId: actor.id!, reason: 'Naya item: details baqi', idempotencyKey: `new-item:${t.id}:${item.id}` } });
+    await audit(tx, actor, { action: 'NEW_ITEM_USED', recordType: 'ProcedureTask', recordId: t.id, after: { itemId: item.id, name, quantity: input.quantity, evidence: input.evidenceAttachmentId } });
+    await notifyRoles(tx, ['MANAGER', 'MD', 'MARKETING_DIRECTOR'], { type: 'NEW_ITEM_DETAILS', subject: `Naya item: ${name}. Cost aur details add karein`, recordType: 'StockItem', recordId: item.id, sender: actor });
+    return { itemId: item.id, name, quantity: input.quantity };
   });
 }
 

@@ -79,9 +79,9 @@ describe('§16 — Meta sheets: link, assign, reassign (one member at a time)', 
   });
 });
 
-describe('§16 — Hamza Zafar is never Dr Hamza Rasool: no clinical access', () => {
-  it('refuses every clinical / patient endpoint', async () => {
-    for (const path of ['/api/doctor/queue', '/api/reception/search?q=0300', '/api/reception/tracker', '/api/assistant/procedures', '/api/manager/audit', '/api/inventory/stock', '/api/cash/report?from=2026-01-01&to=2026-01-02']) {
+describe('§16, D-092 — Hamza Zafar is never Dr Hamza Rasool, and does no desk or clinical work', () => {
+  it('refuses the doctor, desk and assistant endpoints', async () => {
+    for (const path of ['/api/doctor/queue', '/api/reception/search?q=0300', '/api/reception/tracker', '/api/assistant/procedures']) {
       expect((await hamza.get(path)).status, path).toBe(403);
     }
     const hz = await prisma.user.findUniqueOrThrow({ where: { id: hamzaId } });
@@ -190,7 +190,7 @@ describe('§15 / §16 — complaints: delegate to Manager, escalate to Hamza; no
 });
 
 describe('§15 — MD reports with drill-down', () => {
-  it('staff, purchases, stock and cash are readable by the MD only', async () => {
+  it('staff, purchases, stock and cash are readable by the MD and Hamza Zafar only (D-092)', async () => {
     const r = await mdApi.get(`/api/md/reports/staff?from=${addDaysStr(today(), -7)}&to=${today()}`);
     expect(r.status).toBe(200);
     expect(Array.isArray(r.body.items)).toBe(true);
@@ -198,7 +198,7 @@ describe('§15 — MD reports with drill-down', () => {
     expect((await mdApi.get('/api/inventory/stock')).status).toBe(200);
     expect((await mdApi.get(`/api/cash/report?from=${today()}&to=${today()}`)).status).toBe(200);
     expect((await mdApi.post('/api/cash/closings', { date: '2001-01-01', countedCashPaisa: 0 })).status).toBe(403); // read-only
-    for (const api of [mgr, hamza, muaz]) expect((await api.get(`/api/md/reports/staff?from=${today()}&to=${today()}`)).status).toBe(403);
+    for (const api of [mgr, muaz]) expect((await api.get(`/api/md/reports/staff?from=${today()}&to=${today()}`)).status).toBe(403);
   });
 });
 

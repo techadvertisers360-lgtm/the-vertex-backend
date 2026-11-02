@@ -153,7 +153,7 @@ receptionRouter.post(
       params: idParam,
       idempotent: true,
       status: 201,
-      body: z.object({
+      body: z.object({ slipAttachmentId: z.string().min(1).max(64).optional(),
         amountPaisa: z.number().int().positive(),
         method: z.enum(MONEY_METHODS),
         reference: z.string().max(100).optional(),

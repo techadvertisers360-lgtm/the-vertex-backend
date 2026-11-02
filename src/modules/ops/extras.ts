@@ -183,3 +183,18 @@ export async function feedbackReport(month: string) {
     comments: rows.filter((r) => r.suggestion).slice(0, 50).map((r) => ({ text: r.suggestion!, at: r.submittedAt })),
   };
 }
+
+// ───────────── New items from the Assistant ─────────────
+
+export const listNewItems = async () => ({ items: await prisma.stockItem.findMany({ where: { needsDetails: true }, select: { id: true, name: true, baseUnit: true, minQty: true, createdAt: true }, orderBy: { createdAt: 'asc' } }) });
+
+export async function completeNewItem(actor: Actor, id: string, input: { unit: string; minQty: number; costPaisa: number }) {
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.stockItem.findUnique({ where: { id }, select: { needsDetails: true, baseUnit: true, minQty: true } });
+    if (!before) throw new NotFoundError('Item');
+    if (!before.needsDetails) throw new ConflictError('ALREADY_DONE', 'Is item ki details pehle hi mukammal hain.');
+    const after = await tx.stockItem.update({ where: { id }, data: { needsDetails: false, baseUnit: input.unit.trim(), minQty: input.minQty, fallbackCostPaisa: BigInt(input.costPaisa) }, select: { id: true, name: true, needsDetails: true } });
+    await audit(tx, actor, { action: 'NEW_ITEM_COMPLETED', recordType: 'StockItem', recordId: id, before, after: { unit: input.unit, minQty: input.minQty, cost: input.costPaisa } });
+    return after;
+  });
+}

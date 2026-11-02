@@ -147,8 +147,10 @@ export async function patientHistory(actor: Actor, patientId: string) {
   if (approved && !own) {
     await audit(prisma, actor, { action: 'HISTORY_VIEWED_WITH_APPROVAL', recordType: 'Patient', recordId: patientId });
   }
+  const labReports = await prisma.attachment.findMany({ where: { recordType: 'Patient', recordId: patientId, route: 'labReport' }, orderBy: { createdAt: 'desc' }, select: { id: true, fileName: true, createdAt: true } });
   return {
     patient,
+    labReports,
     access: own ? 'own' : 'approved',
     visits: visits.map((v) => {
       const invoiceIds = invoices.filter((i) => i.appointmentId === v.id).map((i) => i.id);

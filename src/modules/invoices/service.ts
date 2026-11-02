@@ -15,8 +15,7 @@ import {
   moveInvoiceBalance,
   paymentReceiptNumber,
   receiveAdvance,
-  refundAdvance,
-} from '../../services/invoicePayments';
+  refundAdvance, fileSlip } from '../../services/invoicePayments';
 import { publish, roleRoom } from '../../services/realtime';
 import { getSetting } from '../../services/settings';
 import { journeyChanged } from '../../services/tracker';
@@ -220,7 +219,7 @@ export async function formOptions() {
     getSetting('invoice.taxBasisPoints'),
   ]);
   const nonCashRateBp = await getSetting('invoice.taxCardBasisPoints');
-  return { doctors: doctors.map((d) => ({ id: d.id, name: d.displayName })), paymentModes: modes, categories, services, bankAccounts: banks, tax: { enabled: taxEnabled, rateBp: taxRateBp, nonCashRateBp } };
+  return { doctors: doctors.map((d) => ({ id: d.id, name: d.displayName })), paymentModes: modes, categories, services, bankAccounts: banks, tax: { enabled: taxEnabled, rateBp: taxRateBp, nonCashRateBp }, requireSlip: await getSetting('payment.requireSlip') };
 }
 
 async function openVisitsToday(db: Tx | typeof prisma, patientId: string) {
@@ -249,6 +248,7 @@ export interface PaymentInput {
   bankAccountId?: string;
   /** The patient confirmed that anything above the balance is kept as an advance. */
   extraToAdvance?: boolean;
+  slipAttachmentId?: string;
 }
 
 export interface DirectInvoiceInput {
@@ -344,6 +344,7 @@ type InvoiceRow = NonNullable<Awaited<ReturnType<typeof prisma.invoice.findUniqu
 /** One payment on a locked invoice: its share goes on the invoice, and any confirmed extra becomes an advance. */
 async function takePayment(tx: Tx, actor: Actor, inv: InvoiceRow, p: PaymentInput, key: string): Promise<InvoiceRow> {
   const details = await moneyDetailsFromMode(tx, p);
+  await fileSlip(tx, actor, details.method, p.slipAttachmentId, inv.id);
   const { toInvoice, toAdvance } = splitPayment(inv.balancePaisa, BigInt(p.amountPaisa), { extraToAdvance: p.extraToAdvance, hasPatient: !!inv.patientId });
   let updated = inv;
   if (toInvoice > 0n) {

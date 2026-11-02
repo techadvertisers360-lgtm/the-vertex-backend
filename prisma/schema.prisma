@@ -371,6 +371,7 @@ enum UploadRoute {
   vendorInvoice
   labReport
   officeBill
+  paymentSlip
 }
 
 // ───────────────────────────── Identity & auth ─────────────────────────────
@@ -1557,6 +1558,10 @@ model StockItem {
   salePricePaisa    BigInt?
   /// Lowest price a pharmacy product may sell at; null means no limit (D-090).
   floorPricePaisa   BigInt?
+  /// An Assistant added this during a procedure; MD or Hamza still have to complete it (D-091).
+  needsDetails      Boolean  @default(false)
+  /// Cost of one unit where stock was used without a batch (D-091).
+  fallbackCostPaisa BigInt?
   preferredVendorId String?
   /// Procedure catalogue fields from the developer's CSV import (D-063); all optional.
   code              String?   @unique @db.VarChar(64)

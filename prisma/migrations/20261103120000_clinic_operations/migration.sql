@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `attachments` MODIFY `route` ENUM('consentForm', 'prescriptionPhoto', 'beforePhoto', 'afterPhoto', 'itemsUsedEvidence', 'roomCleanPhoto', 'roomChecklistPhoto', 'machineIssuePhoto', 'damagePhoto', 'adCreative', 'requestAttachment', 'complaintAttachment', 'vendorInvoice', 'labReport', 'officeBill') NOT NULL;
+ALTER TABLE `attachments` MODIFY `route` ENUM('consentForm', 'prescriptionPhoto', 'beforePhoto', 'afterPhoto', 'itemsUsedEvidence', 'roomCleanPhoto', 'roomChecklistPhoto', 'machineIssuePhoto', 'damagePhoto', 'adCreative', 'requestAttachment', 'complaintAttachment', 'vendorInvoice', 'labReport', 'officeBill', 'paymentSlip') NOT NULL;
 
 -- AlterTable
 ALTER TABLE `doctor_profiles` ADD COLUMN `departments` JSON NULL;
@@ -18,7 +18,9 @@ ALTER TABLE `room_reservations` ADD COLUMN `purpose` VARCHAR(191) NULL;
 ALTER TABLE `services` ADD COLUMN `department` VARCHAR(191) NULL;
 
 -- AlterTable
-ALTER TABLE `stock_items` ADD COLUMN `floorPricePaisa` BIGINT NULL;
+ALTER TABLE `stock_items` ADD COLUMN `fallbackCostPaisa` BIGINT NULL,
+    ADD COLUMN `floorPricePaisa` BIGINT NULL,
+    ADD COLUMN `needsDetails` BOOLEAN NOT NULL DEFAULT false;
 
 -- CreateTable
 CREATE TABLE `invoice_requests` (

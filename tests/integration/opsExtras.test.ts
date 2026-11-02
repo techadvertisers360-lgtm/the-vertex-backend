@@ -107,7 +107,7 @@ describe('D-090 tax on non-cash payments', () => {
     await md.put('/api/invoices/settings', { taxEnabled: true, taxBasisPoints: 1600, taxCardBasisPoints: 500 });
     try {
       const p = await patient();
-      const card = await prisma.paymentMode.findFirstOrThrow({ where: { method: 'CARD' } });
+      const card = await prisma.paymentMode.create({ data: { name: `Card ${uid()}`, method: 'CARD' } });
       const bank = await prisma.bankAccount.create({ data: { name: `Bank ${uid()}`, bankName: 'HBL', accountNo: uid() } });
       const paidCard = await rec.post('/api/invoices', { patientId: p.id, confirmOpenVisit: true, lines: [{ description: 'S', unitPricePaisa: 1_050_000 }], payment: { amountPaisa: 100, paymentModeId: card.id, bankAccountId: bank.id } }, newKey());
       expect(paidCard.status, JSON.stringify(paidCard.body)).toBe(201);
@@ -173,5 +173,87 @@ describe('D-090 payroll, feedback', () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.overall.map((o: { name: string }) => o.name)).toEqual(['Staff', 'Clinic', 'Reception', 'Manager']);
     expect((await rec.get('/api/ops/feedback-report')).status).toBe(403);
+  });
+});
+
+describe('D-091 last items from the demo', () => {
+  it('the slip is needed only with the setting on, and is filed on the invoice', async () => {
+    const card = await prisma.paymentMode.create({ data: { name: `Card ${uid()}`, method: 'CARD' } });
+    const bank = await prisma.bankAccount.create({ data: { name: `Bank ${uid()}`, bankName: 'HBL', accountNo: uid() } });
+    const inv = await invoice(500_000);
+    const pay = (extra: object) => rec.post(`/api/invoices/${inv.id}/payments`, { amountPaisa: 1_000, paymentModeId: card.id, bankAccountId: bank.id, ...extra }, newKey());
+    expect((await pay({})).status).toBe(201);
+    await setting('payment.requireSlip', true);
+    try {
+      expect((await pay({})).status).toBe(422);
+      const slip = await rec.post('/api/files/dev-upload', { route: 'paymentSlip', recordType: 'Pending', recordId: recId, fileName: 's.jpg', mime: 'image/jpeg', size: 100 });
+      expect(slip.status, JSON.stringify(slip.body)).toBe(201);
+      expect((await pay({ slipAttachmentId: slip.body.attachmentId })).status).toBe(201);
+      expect(await prisma.attachment.findUniqueOrThrow({ where: { id: slip.body.attachmentId } })).toMatchObject({ recordType: 'Invoice', recordId: inv.id });
+    } finally {
+      await setting('payment.requireSlip', false);
+    }
+  });
+
+  it('Clinic Now has seven days for each doctor; Cash Closing shows what was left yesterday', async () => {
+    const now = await mgr.get('/api/ops/clinic-now');
+    expect(now.status, JSON.stringify(now.body)).toBe(200);
+    expect(now.body.schedule.every((s: { days: unknown[] }) => s.days.length === 7)).toBe(true);
+    const m = await agentFor('MANAGER');
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    expect((await rec.post('/api/ops/handovers', { date: yesterday, amountPaisa: 100, leftAtDeskPaisa: 123_400, toId: m.user.id })).status).toBe(201);
+    const day = await mgr.get('/api/cash/day');
+    expect(day.status, JSON.stringify(day.body)).toBe(200);
+    expect(day.body.leftFromYesterdayPaisa).toBe(123_400);
+  });
+
+  it('a new item waits for details, then its cost counts; only owners complete it', async () => {
+    const assistant = await makeUser('ASSISTANT');
+    const name = `New item ${uid()}`;
+    const item = await prisma.stockItem.create({ data: { name, category: 'Procedure', baseUnit: 'piece', kind: 'PROCEDURE', minQty: 0, needsDetails: true } });
+    await prisma.stockTransaction.create({ data: { itemId: item.id, type: 'USAGE', quantity: -2, actorId: assistant.id } });
+    const list = await md.get('/api/ops/new-items');
+    expect(list.body.items.map((i: { id: string }) => i.id)).toContain(item.id);
+    expect((await mgr.put(`/api/ops/new-items/${item.id}`, { unit: 'tube', minQty: 1, costPaisa: 5_000 })).status).toBe(403);
+    expect((await md.put(`/api/ops/new-items/${item.id}`, { unit: 'tube', minQty: 1, costPaisa: 5_000 })).status).toBe(200);
+    expect((await md.put(`/api/ops/new-items/${item.id}`, { unit: 'tube', minQty: 1, costPaisa: 5_000 })).status).toBe(409);
+    expect(await prisma.stockItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ needsDetails: false, fallbackCostPaisa: 5_000n });
+  });
+});
+
+describe('D-092 who sees what, as in the demo', () => {
+  it('Hamza Zafar opens owner screens; Muaz does not', async () => {
+    const hamza = call((await agentFor('MARKETING_DIRECTOR')).agent);
+    for (const url of ['/api/invoices', '/api/patient-records', '/api/cash/day', '/api/ops/profit-loss']) expect((await hamza.get(url)).status, url).toBe(200);
+    const muaz = call((await agentFor('MARKETING_LEAD')).agent);
+    for (const url of ['/api/invoices', '/api/patient-records', '/api/cash/day', '/api/ops/profit-loss']) expect((await muaz.get(url)).status, url).toBe(403);
+    expect((await muaz.get('/api/ops/campaigns')).status).toBe(200);
+  });
+
+  it('the Manager sees shares but no cost; a Doctor sees only their own plans; Reception can raise a purchase order', async () => {
+    const res = await mgr.get(`/api/ops/doctor-ledger/manager?month=${month}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(JSON.stringify(res.body)).not.toMatch(/itemCost|fixedCost|rule/);
+    const d = await agentFor('DOCTOR');
+    expect((await call(d.agent).get('/api/ops/plans')).body.items).toEqual([]);
+    const vendor = await prisma.vendor.create({ data: { name: `PO ${uid()}` } });
+    expect((await rec.post('/api/ops/purchase-orders', { vendorId: vendor.id, lines: [{ name: 'Gloves', quantity: 2 }] })).status).toBe(201);
+  });
+
+  it('with the setting on, leave requests and Chat work outside the clinic, the rest does not', async () => {
+    const u = await agentFor('ASSISTANT');
+    await prisma.user.update({ where: { id: u.user.id }, data: { geofenceRequired: true } });
+    await prisma.geofenceConfig.upsert({ where: { id: 1 }, update: { enabled: true }, create: { id: 1, enabled: true } });
+    await setting('geofence.outsideLimitedAccess', true);
+    const api = call(u.agent);
+    try {
+      expect((await api.get('/api/ops/chat/rooms')).status).toBe(200);
+      expect((await api.get('/api/requests/leave')).body.error?.code).not.toBe('GEOFENCE_REQUIRED');
+      expect((await api.get('/api/assistant/stock-items')).body.error?.code).toBe('GEOFENCE_REQUIRED');
+    } finally {
+      await setting('geofence.outsideLimitedAccess', false);
+      await prisma.geofenceConfig.updateMany({ data: { enabled: false } });
+      await prisma.user.update({ where: { id: u.user.id }, data: { geofenceRequired: false } });
+    }
   });
 });

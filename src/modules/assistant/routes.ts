@@ -80,6 +80,7 @@ assistantRouter.post('/procedures/:id/clean', route({ permission: 'assistant:tas
 assistantRouter.post('/procedures/:id/emergency', route({ permission: 'assistant:tasks', params: idParam, body: z.object({ reason }) }, async ({ actor, params, body }) => proc.raiseEmergency(actor, params.id, body.reason)));
 
 /** Names, units and usable quantity only — no cost (spec §4). */
+assistantRouter.post('/procedures/:id/new-item', route({ permission: 'assistant:tasks', status: 201, params: idParam, body: z.object({ name: z.string().max(120), quantity: z.number().int().min(1).max(100_000), evidenceAttachmentId: id }) }, async ({ actor, params, body }) => proc.addNewItemUsed(actor, params.id, body)));
 assistantRouter.get('/stock-items', route({ permission: 'assistant:tasks' }, async () => ({ items: await stockForUsage() })));
 
 /** Reception: same-day + session procedure assignment (spec §9) and the upcoming list. Mounted at /reception. */

@@ -25,7 +25,7 @@ const listQuery = filters.extend({ page, pageSize: z.coerce.number().refine((n) 
 const paging = z.object({ page, pageSize: z.coerce.number().int().min(1).max(100).default(25) });
 
 const moneyFields = { paymentModeId: id, reference: z.string().max(100).optional(), bankAccountId: id.optional() };
-const payment = z.object({ amountPaisa: paisa, ...moneyFields, extraToAdvance: z.boolean().optional() });
+const payment = z.object({ amountPaisa: paisa, ...moneyFields, extraToAdvance: z.boolean().optional(), slipAttachmentId: id.optional() });
 
 // ───────────── List and exports (static paths first, so they are not read as an :id) ─────────────
 

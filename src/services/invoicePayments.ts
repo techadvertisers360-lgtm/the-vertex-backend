@@ -5,6 +5,8 @@ import { formatNumber, nextSequence } from '../lib/misc';
 import type { MoneyMethod } from '../lib/paymentMethods';
 import { local } from '../lib/time';
 import { audit, type Actor } from './audit';
+import { claimAttachments } from './files';
+import { getSetting } from './settings';
 
 /**
  * Money movements on invoices and patient advances (D-084). Every write happens inside the caller's transaction, so
@@ -46,6 +48,12 @@ export async function moneyDetailsFromMode(db: Db, input: { paymentModeId: strin
   if (!mode || !mode.active) throw new ValidationError('Payment mode nahi mila ya band hai.');
   if (mode.method === 'ADVANCE') throw new ValidationError('Yeh payment mode istemal nahi ho sakta.');
   return checkMoneyDetails(db, { method: mode.method, paymentModeId: mode.id, reference: input.reference, bankAccountId: input.bankAccountId });
+}
+
+/** The slip of a non-cash payment: required only when the setting is on (D-091); always filed on the invoice when given. */
+export async function fileSlip(tx: Tx, actor: Actor, method: PaymentMethod, slipAttachmentId: string | undefined, invoiceId: string) {
+  if (method !== 'CASH' && method !== 'ADVANCE' && !slipAttachmentId && (await getSetting('payment.requireSlip', tx))) throw new ValidationError('Payment slip ki photo add karein.');
+  if (slipAttachmentId) await claimAttachments(tx, actor, [slipAttachmentId], ['paymentSlip'], 'Invoice', invoiceId);
 }
 
 /** New money received against an invoice: a Payment and its cash or bank ledger entry. */

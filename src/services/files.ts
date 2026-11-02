@@ -37,6 +37,7 @@ export const UPLOAD_RULES: Record<UploadRoute, RouteRule> = {
     maxFileSize: '8MB',
     kinds: ['image', 'pdf'],
   },
+  paymentSlip: { isPrivate: true, uploaders: ['RECEPTIONIST', 'MANAGER'], recordTypes: ['Invoice'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
   labReport: { isPrivate: true, uploaders: ['RECEPTIONIST', 'MANAGER', 'DOCTOR'], recordTypes: ['Patient'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
   officeBill: { isPrivate: true, uploaders: ['RECEPTIONIST', 'MANAGER', 'OFFICE_BOY', 'MD', 'MARKETING_DIRECTOR'], recordTypes: ['OfficePurchase'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
   complaintAttachment: {

@@ -21,13 +21,13 @@ const pct = (amount: bigint, bp: number) => (amount * BigInt(bp) + 5_000n) / 10_
 /** What stock each procedure used, at the cost of the batch it came from. */
 async function usageCostByAppointment(appointmentIds: string[]) {
   const tasks = await prisma.procedureTask.findMany({ where: { appointmentId: { in: appointmentIds } }, select: { id: true, appointmentId: true } });
-  const used = await prisma.stockTransaction.findMany({ where: { procedureTaskId: { in: tasks.map((t) => t.id) }, type: 'USAGE' }, select: { procedureTaskId: true, quantity: true, unitCostPaisa: true, batchId: true, item: { select: { name: true } } } });
+  const used = await prisma.stockTransaction.findMany({ where: { procedureTaskId: { in: tasks.map((t) => t.id) }, type: 'USAGE' }, select: { procedureTaskId: true, quantity: true, unitCostPaisa: true, batchId: true, item: { select: { name: true, fallbackCostPaisa: true } } } });
   const batches = await prisma.stockBatch.findMany({ where: { id: { in: used.map((u) => u.batchId).filter((x): x is string => !!x) } }, select: { id: true, unitCostPaisa: true } });
   const out = new Map<string, { costPaisa: bigint; items: string[] }>();
   for (const u of used) {
     const appointmentId = tasks.find((t) => t.id === u.procedureTaskId)?.appointmentId;
     if (!appointmentId) continue;
-    const unit = u.unitCostPaisa ?? batches.find((b) => b.id === u.batchId)?.unitCostPaisa ?? 0n;
+    const unit = u.unitCostPaisa ?? batches.find((b) => b.id === u.batchId)?.unitCostPaisa ?? u.item.fallbackCostPaisa ?? 0n;
     const row = out.get(appointmentId) ?? { costPaisa: 0n, items: [] };
     row.costPaisa += unit * BigInt(-u.quantity);
     row.items.push(`${u.item.name} × ${-u.quantity}`);
@@ -96,6 +96,23 @@ export async function doctorLedger(month: string, doctorId?: string) {
     out.push({ doctorId: d.id, name: d.displayName, rule: rules.find((r) => r.doctorId === d.id) ?? null, rows, monthSharePaisa: rows.reduce((s, r) => s + r.sharePaisa, 0n), earnedPaisa: earned, paidPaisa: paid._sum.amountPaisa ?? 0n, balancePaisa: earned - (paid._sum.amountPaisa ?? 0n), payouts });
   }
   return { month, doctors: out };
+}
+
+/** The Manager's view: bills, percentages and shares, without item cost, extra cost or the percentages' setup (client demo). */
+export async function doctorLedgerForManager(month: string) {
+  const { doctors } = await doctorLedger(month);
+  return {
+    month,
+    doctors: doctors.map((d) => ({
+      doctorId: d.doctorId,
+      name: d.name,
+      monthSharePaisa: d.monthSharePaisa,
+      earnedPaisa: d.earnedPaisa,
+      paidPaisa: d.paidPaisa,
+      balancePaisa: d.balancePaisa,
+      rows: d.rows.map(({ invoiceId, patient, own, type, billPaisa, bp, sharePaisa }) => ({ invoiceId, patient, own, type, billPaisa, bp, sharePaisa })),
+    })),
+  };
 }
 
 async function allTimeEarned(doctorId: string) {
@@ -257,11 +274,11 @@ export async function profitAndLoss(month: string) {
     prisma.invoice.aggregate({ where: { status: { not: 'VOID' }, createdAt: { gte: start, lt: end } }, _sum: { balancePaisa: true } }),
     prisma.salarySlip.aggregate({ where: { month }, _sum: { netPaisa: true } }),
     prisma.expense.findMany({ where: { date: { gte: dateOnly(`${month}-01`), lt: dayEnd } }, orderBy: { date: 'desc' } }),
-    prisma.stockTransaction.findMany({ where: { type: { in: ['USAGE', 'SALE'] }, createdAt: { gte: start, lt: end } }, select: { type: true, quantity: true, unitCostPaisa: true, batchId: true } }),
+    prisma.stockTransaction.findMany({ where: { type: { in: ['USAGE', 'SALE'] }, createdAt: { gte: start, lt: end } }, select: { type: true, quantity: true, unitCostPaisa: true, batchId: true, item: { select: { fallbackCostPaisa: true } } } }),
     prisma.user.findMany({ where: { role: 'DOCTOR' }, select: { id: true } }),
   ]);
   const batches = await prisma.stockBatch.findMany({ where: { id: { in: stockRows.map((s) => s.batchId).filter((x): x is string => !!x) } }, select: { id: true, unitCostPaisa: true } });
-  const cost = (type: 'USAGE' | 'SALE') => stockRows.filter((s) => s.type === type).reduce((sum, s) => sum + (s.unitCostPaisa ?? batches.find((b) => b.id === s.batchId)?.unitCostPaisa ?? 0n) * BigInt(-s.quantity), 0n);
+  const cost = (type: 'USAGE' | 'SALE') => stockRows.filter((s) => s.type === type).reduce((sum, s) => sum + (s.unitCostPaisa ?? batches.find((b) => b.id === s.batchId)?.unitCostPaisa ?? s.item.fallbackCostPaisa ?? 0n) * BigInt(-s.quantity), 0n);
   let doctorShare = 0n;
   for (const d of doctors) for (const r of await doctorRows(d.id, start, end)) doctorShare += r.sharePaisa;
   const expenseTotal = expenses.reduce((s, e) => s + e.amountPaisa, 0n);

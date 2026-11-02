@@ -28,11 +28,15 @@ describe('permission matrix (spec §4)', () => {
     for (const p of patientPerms) expect(hasPermission('OFFICE_BOY', p)).toBe(false);
   });
 
-  it('marketing roles have no clinical / financial permissions', () => {
-    for (const role of ['MARKETING_DIRECTOR', 'MARKETING_LEAD'] as const) {
-      for (const p of ['doctor:history_own', 'reception:billing', 'stock:manage', 'cash:closing', 'patients:search'] as const) {
-        expect(hasPermission(role, p), `${role} ${p}`).toBe(false);
-      }
+  it('Muaz (marketing) has no clinical or financial permission; Hamza Zafar is an owner but never does desk or clinical work (D-092)', () => {
+    for (const p of ['doctor:history_own', 'reception:billing', 'stock:manage', 'cash:closing', 'patients:search', 'patients:records', 'finance:owner', 'invoice:view'] as const) {
+      expect(hasPermission('MARKETING_LEAD', p), `MARKETING_LEAD ${p}`).toBe(false);
+    }
+    for (const p of ['doctor:history_own', 'reception:billing', 'patients:search', 'cash:closing', 'stock:approve_md', 'md:approvals'] as const) {
+      expect(hasPermission('MARKETING_DIRECTOR', p), `MARKETING_DIRECTOR ${p}`).toBe(false);
+    }
+    for (const p of ['finance:owner', 'patients:records', 'stock:manage', 'invoice:audit'] as const) {
+      expect(hasPermission('MARKETING_DIRECTOR', p), `MARKETING_DIRECTOR ${p}`).toBe(true);
     }
   });
 
