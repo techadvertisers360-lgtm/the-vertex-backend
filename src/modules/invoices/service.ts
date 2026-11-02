@@ -219,7 +219,8 @@ export async function formOptions() {
     getSetting('invoice.taxEnabled'),
     getSetting('invoice.taxBasisPoints'),
   ]);
-  return { doctors: doctors.map((d) => ({ id: d.id, name: d.displayName })), paymentModes: modes, categories, services, bankAccounts: banks, tax: { enabled: taxEnabled, rateBp: taxRateBp } };
+  const nonCashRateBp = await getSetting('invoice.taxCardBasisPoints');
+  return { doctors: doctors.map((d) => ({ id: d.id, name: d.displayName })), paymentModes: modes, categories, services, bankAccounts: banks, tax: { enabled: taxEnabled, rateBp: taxRateBp, nonCashRateBp } };
 }
 
 async function openVisitsToday(db: Tx | typeof prisma, patientId: string) {
@@ -294,7 +295,13 @@ export async function createDirectInvoice(actor: Actor, input: DirectInvoiceInpu
     });
 
     const taxOn = input.applyTax !== false && (await getSetting('invoice.taxEnabled', tx));
-    const totals = invoiceTotals(lines, BigInt(input.discountPaisa ?? 0), taxOn ? await getSetting('invoice.taxBasisPoints', tx) : null);
+    let rate: number | null = taxOn ? await getSetting('invoice.taxBasisPoints', tx) : null;
+    if (taxOn && input.payment?.paymentModeId) {
+      const nonCash = await getSetting('invoice.taxCardBasisPoints', tx);
+      const mode = nonCash === null ? null : await tx.paymentMode.findUnique({ where: { id: input.payment.paymentModeId }, select: { method: true } });
+      if (mode && mode.method !== 'CASH') rate = nonCash;
+    }
+    const totals = invoiceTotals(lines, BigInt(input.discountPaisa ?? 0), rate);
 
     let inv = await tx.invoice.create({
       data: {

@@ -507,6 +507,8 @@ export interface FeedbackInput {
   doctorRating?: number;
   staffRating?: number;
   clinicRating?: number;
+  receptionRating?: number;
+  managerRating?: number;
   suggestion?: string;
 }
 
@@ -518,8 +520,8 @@ export async function saveFeedback(actor: Actor, appointmentId: string, f: Feedb
     const existing = await tx.feedback.findUnique({ where: { appointmentId } });
     if (existing?.submittedAt) throw new ConflictError('FEEDBACK_DONE', 'Feedback pehle hi save ho chuka hai.');
     const data = f.skip
-      ? { skipped: true, doctorRating: null, staffRating: null, clinicRating: null, suggestion: null, submittedAt: null }
-      : { skipped: false, doctorRating: f.doctorRating ?? null, staffRating: f.staffRating ?? null, clinicRating: f.clinicRating ?? null, suggestion: f.suggestion ?? null, submittedAt: new Date() };
+      ? { skipped: true, doctorRating: null, staffRating: null, clinicRating: null, receptionRating: null, managerRating: null, suggestion: null, submittedAt: null }
+      : { skipped: false, doctorRating: f.doctorRating ?? null, staffRating: f.staffRating ?? null, clinicRating: f.clinicRating ?? null, receptionRating: f.receptionRating ?? null, managerRating: f.managerRating ?? null, suggestion: f.suggestion ?? null, submittedAt: new Date() };
     const row = existing
       ? await tx.feedback.update({ where: { id: existing.id }, data })
       : await tx.feedback.create({ data: { appointmentId, patientId: a.patientId, token: randomToken(24), ...data } });
@@ -547,7 +549,11 @@ export async function closeInvoice(actor: Actor, invoiceId: string) {
     // Close with a balance only when the installment schedule covers it (clinic decision Q7).
     if (inv.balancePaisa > 0n) {
       const schedule = inv.planVersionId ? await tx.installment.findMany({ where: { versionId: inv.planVersionId } }) : [];
-      if (!balanceCovered(inv, schedule, clinicDateStr(now))) throw new LockedError('BALANCE_NOT_SCHEDULED', BALANCE_NOT_SCHEDULED_MSG);
+      if (!balanceCovered(inv, schedule, clinicDateStr(now))) {
+        // A Doctor, Manager or MD agreed the patient may pay part now (D-090): the rest stays due on the invoice.
+        const agreed = await tx.invoiceRequest.findFirst({ where: { invoiceId, type: 'PART_PAYMENT', status: 'APPROVED' }, orderBy: { decidedAt: 'desc' }, select: { amountApprovedPaisa: true } });
+        if (!agreed || inv.paidPaisa < (agreed.amountApprovedPaisa ?? 0n)) throw new LockedError('BALANCE_NOT_SCHEDULED', BALANCE_NOT_SCHEDULED_MSG);
+      }
     }
 
     await tx.invoice.update({ where: { id: invoiceId }, data: { status: 'CLOSED', closedAt: now, closedById: actor.id, prescriptionAttachmentId: prescription.id } });

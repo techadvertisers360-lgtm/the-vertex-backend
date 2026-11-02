@@ -1,8 +1,9 @@
 import { moneyTx, prisma } from '../../lib/prisma';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors';
 import { formatNumber, nextSequence } from '../../lib/misc';
-import { clinicDayBounds, dateOnly, dateOnlyStr, local } from '../../lib/time';
+import { clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr, local } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
+import { notifyRoles } from '../../services/notifications';
 
 /**
  * Owner money views from the client's demo (D-089): doctor share, procedure costs, payroll, profit and loss.
@@ -78,7 +79,7 @@ async function doctorRows(doctorId: string, start: Date, end: Date) {
     const cost = procedure && i.appointmentId ? (costs.get(i.appointmentId)?.costPaisa ?? 0n) : 0n;
     const fixed = procedure ? (rule?.fixedCostPaisa ?? 0n) : 0n;
     const base = i.totalPaisa - cost - fixed;
-    return { invoiceId: i.id, number: i.number, date: i.createdAt, patient: i.patient?.name ?? null, own: isOwn, type: procedure ? 'Procedure' : 'Consultation', billPaisa: i.totalPaisa, itemCostPaisa: cost, fixedCostPaisa: fixed, bp: bp ?? 0, sharePaisa: base > 0n ? pct(base, bp ?? 0) : 0n };
+    return { invoiceId: i.id, patientId: i.patientId, number: i.number, date: i.createdAt, patient: i.patient?.name ?? null, own: isOwn, type: procedure ? 'Procedure' : 'Consultation', billPaisa: i.totalPaisa, itemCostPaisa: cost, fixedCostPaisa: fixed, bp: bp ?? 0, sharePaisa: base > 0n ? pct(base, bp ?? 0) : 0n };
   });
 }
 
@@ -177,6 +178,8 @@ export async function staffList(month: string) {
         absences,
         lates: mine.filter((m) => m.kind === 'LATE').length,
         uniformNotes: mine.filter((m) => m.kind === 'UNIFORM').length,
+        warnings: mine.filter((m) => m.kind === 'WARNING').length,
+        points: mine.filter((m) => m.kind === 'POINTS').reduce((s, m) => s + (m.points ?? 0), 0),
         absenceDeductionPaisa: (salary * BigInt(absences) + days / 2n) / days,
         advanceBalancePaisa: balance,
         slip: slips.find((s) => s.userId === u.id) ?? null,
@@ -203,9 +206,9 @@ export async function saveStaffProfile(actor: Actor, userId: string, input: { sa
   });
 }
 
-export async function addStaffMark(actor: Actor, userId: string, input: { month: string; kind: 'ABSENCE' | 'LATE' | 'UNIFORM'; note?: string }) {
+export async function addStaffMark(actor: Actor, userId: string, input: { month: string; kind: 'ABSENCE' | 'LATE' | 'UNIFORM' | 'WARNING' | 'POINTS'; points?: number; note?: string }) {
   return prisma.$transaction(async (tx) => {
-    const m = await tx.staffMark.create({ data: { userId, month: input.month, kind: input.kind, note: input.note?.trim() || null, createdById: actor.id! } });
+    const m = await tx.staffMark.create({ data: { userId, month: input.month, kind: input.kind, points: input.kind === 'POINTS' ? (input.points ?? null) : null, note: input.note?.trim() || null, createdById: actor.id! } });
     await audit(tx, actor, { action: 'STAFF_MARK_ADDED', recordType: 'StaffMark', recordId: m.id, after: { userId, month: m.month, kind: m.kind, note: m.note } });
     return m;
   });
@@ -219,7 +222,7 @@ export async function giveAdvance(actor: Actor, userId: string, input: { amountP
   });
 }
 
-export async function paySalary(actor: Actor, userId: string, input: { month: string; advanceCutPaisa: number }) {
+export async function paySalary(actor: Actor, userId: string, input: { month: string; advanceCutPaisa: number; bonusPaisa?: number }) {
   return moneyTx(async (tx) => {
     if (await tx.salarySlip.findUnique({ where: { userId_month: { userId, month: input.month } }, select: { id: true } })) throw new ConflictError('ALREADY_PAID', 'Is mahine ki salary ban chuki hai.');
     const p = await tx.staffProfile.findUnique({ where: { userId } });
@@ -230,12 +233,13 @@ export async function paySalary(actor: Actor, userId: string, input: { month: st
     const bal = await tx.salaryAdvance.aggregate({ where: { userId }, _sum: { amountPaisa: true } });
     const cut = BigInt(input.advanceCutPaisa);
     if (cut > (bal._sum.amountPaisa ?? 0n)) throw new ValidationError('Katoti advance ke balance se zyada nahi ho sakti.');
-    const net = p.salaryPaisa - deduction - cut;
+    const bonus = BigInt(input.bonusPaisa ?? 0);
+    const net = p.salaryPaisa - deduction - cut + bonus;
     if (net < 0n) throw new ValidationError('Katoti salary se zyada hai.');
     const year = local(new Date()).year;
-    const slip = await tx.salarySlip.create({ data: { number: formatNumber('VH-SAL', year, await nextSequence(tx, `salary:${year}`)), userId, month: input.month, salaryPaisa: p.salaryPaisa, extraAbsences: absences, absenceDeductionPaisa: deduction, advanceCutPaisa: cut, netPaisa: net, paidById: actor.id! } });
+    const slip = await tx.salarySlip.create({ data: { number: formatNumber('VH-SAL', year, await nextSequence(tx, `salary:${year}`)), userId, month: input.month, salaryPaisa: p.salaryPaisa, extraAbsences: absences, absenceDeductionPaisa: deduction, advanceCutPaisa: cut, bonusPaisa: bonus, netPaisa: net, paidById: actor.id! } });
     if (cut > 0n) await tx.salaryAdvance.create({ data: { userId, amountPaisa: -cut, note: `Katoti ${input.month}`, slipId: slip.id, actorId: actor.id! } });
-    await audit(tx, actor, { action: 'SALARY_PAID', recordType: 'SalarySlip', recordId: slip.id, after: { userId, month: input.month, net, deduction, cut } });
+    await audit(tx, actor, { action: 'SALARY_PAID', recordType: 'SalarySlip', recordId: slip.id, after: { userId, month: input.month, net, deduction, cut, bonus } });
     return slip;
   });
 }
@@ -284,4 +288,21 @@ export async function profitAndLoss(month: string) {
     marginBp: billedTotal > 0n ? Number((profit * 10_000n) / billedTotal) : 0,
     expenses: expenses.map((e) => ({ ...e, date: dateOnlyStr(e.date) })),
   };
+}
+
+/** First day of the month: tell MD and Hamza how last month ended (client demo, D-090). The dedupe key sends it once. */
+export async function runMonthEndNotice(now: Date): Promise<number> {
+  const today = clinicDateStr(now);
+  if (!today.endsWith('-01')) return 0;
+  const [y, m] = today.split('-').map(Number) as [number, number];
+  const month = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  const owners = await prisma.user.count({ where: { role: { in: ['MD', 'MARKETING_DIRECTOR'] }, active: true } });
+  if (!owners) return 0;
+  const already = await prisma.notification.count({ where: { dedupeKey: { startsWith: `month-end:${month}:` } } });
+  if (already) return 0;
+  const r = await profitAndLoss(month);
+  const profit = r.profitPaisa >= 0n;
+  const amount = (r.profitPaisa < 0n ? -r.profitPaisa : r.profitPaisa) / 100n;
+  await notifyRoles(prisma, ['MD', 'MARKETING_DIRECTOR'], { type: 'MONTH_END_RESULT', subject: `${month}: ${profit ? 'PROFIT' : 'LOSS'} of Rs ${amount.toLocaleString('en-PK')}`, recordType: 'Report', recordId: month, dedupeKey: `month-end:${month}` });
+  return 1;
 }

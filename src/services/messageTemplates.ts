@@ -33,6 +33,18 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   appointment_confirmed: { label: 'Appointment confirmed', audience: 'patient_or_doctor', variables: APPT_VARS, render: (p) => appointmentText('confirmed', p) },
   appointment_rescheduled: { label: 'Appointment rescheduled', audience: 'patient_or_doctor', variables: [...APPT_VARS, 'previousWhen'], render: (p) => appointmentText('rescheduled', p) },
   appointment_cancelled: { label: 'Appointment cancelled', audience: 'patient_or_doctor', variables: [...APPT_VARS, 'reason'], render: (p) => appointmentText('cancelled', p) },
+  payment_request: {
+    label: 'Payment request',
+    audience: 'patient',
+    variables: ['patientName', 'amountPaisa', 'invoiceNumber', 'link', 'bank'],
+    render: (p) => `${s(p.patientName)}, aap ki invoice ${s(p.invoiceNumber)} par ${rs(p.amountPaisa)} baqi hain.${p.link ? ` Payment: ${s(p.link)}` : ''}${p.bank ? ` Account: ${s(p.bank)}.` : ''} The Vertex Health.`,
+  },
+  staff_login: {
+    label: 'Staff login details',
+    audience: 'staff',
+    variables: ['name', 'login', 'url'],
+    render: (p) => `${s(p.name)}, The Vertex Health app par aap ka login: ${s(p.login)}.${p.url ? ` ${s(p.url)}` : ''} Password aap ko alag se milega.`,
+  },
   procedure_reminder: {
     label: 'Procedure reminder (2 days before)',
     audience: 'patient_or_doctor',

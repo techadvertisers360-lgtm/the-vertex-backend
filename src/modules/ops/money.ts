@@ -69,8 +69,8 @@ export async function listInvoiceRequests(actor: Actor, status?: 'PENDING' | 'AP
   };
 }
 
-export async function decideInvoiceRequest(actor: Actor, id: string, input: { approve: boolean; amountApprovedPaisa?: number; note?: string }) {
-  return prisma.$transaction(async (tx) => {
+export async function decideInvoiceRequest(actor: Actor, id: string, input: { approve: boolean; amountApprovedPaisa?: number; adjustmentPaisa?: number; note?: string }) {
+  return moneyTx(async (tx) => {
     const r = await tx.invoiceRequest.findUnique({ where: { id } });
     if (!r) throw new NotFoundError('Request');
     if (r.status !== 'PENDING') throw new ConflictError('ALREADY_DECIDED', 'Is request par faisla ho chuka hai.');
@@ -80,9 +80,20 @@ export async function decideInvoiceRequest(actor: Actor, id: string, input: { ap
     if (actor.role === 'DOCTOR' && (r.type !== 'PART_PAYMENT' || (inv?.doctorId ?? visit?.doctorId) !== actor.id)) throw new ForbiddenError({ recordType: 'InvoiceRequest', recordId: id, rule: 'doctor_own_visit' });
     if (!input.approve && !input.note?.trim()) throw new ValidationError('Reject ki wajah likhein.');
     const amount = r.type === 'PART_PAYMENT' && input.approve ? BigInt(input.amountApprovedPaisa ?? Number(r.amountAskedPaisa ?? 0n)) : null;
+    // Bill correction (D-090): a line for the difference, so the original lines stay as they were.
+    const adjustment = r.type === 'BILL_CORRECTION' && input.approve && input.adjustmentPaisa ? BigInt(input.adjustmentPaisa) : null;
+    if (adjustment) {
+      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${r.invoiceId} FOR UPDATE`;
+      const bill = await tx.invoice.findUniqueOrThrow({ where: { id: r.invoiceId }, select: { status: true, subtotalPaisa: true, totalPaisa: true, paidPaisa: true, balancePaisa: true } });
+      if (bill.status === 'VOID') throw new ConflictError('INVOICE_CANCELLED', 'Yeh invoice cancel ho chuki hai.');
+      const total = bill.totalPaisa + adjustment;
+      if (total < bill.paidPaisa) throw new ValidationError('Naya total wusool shuda raqam se kam hai. Pehle refund karein ya invoice cancel karein.');
+      await tx.invoiceLine.create({ data: { invoiceId: r.invoiceId, description: `Correction: ${r.note}`.slice(0, 190), quantity: 1, unitPricePaisa: adjustment, discountPaisa: 0n, lineTotalPaisa: adjustment, reason: input.note?.trim() || r.note } });
+      await tx.invoice.update({ where: { id: r.invoiceId }, data: { subtotalPaisa: bill.subtotalPaisa + adjustment, totalPaisa: total, balancePaisa: total - bill.paidPaisa } });
+    }
     const after = await tx.invoiceRequest.update({
       where: { id },
-      data: { status: input.approve ? 'APPROVED' : 'REJECTED', amountApprovedPaisa: amount, decidedById: actor.id, decidedAt: new Date(), decisionNote: input.note?.trim() || null },
+      data: { adjustmentPaisa: adjustment, status: input.approve ? 'APPROVED' : 'REJECTED', amountApprovedPaisa: amount, decidedById: actor.id, decidedAt: new Date(), decisionNote: input.note?.trim() || null },
     });
     await audit(tx, actor, { action: input.approve ? 'INVOICE_REQUEST_APPROVED' : 'INVOICE_REQUEST_REJECTED', recordType: 'InvoiceRequest', recordId: id, before: { status: r.status }, after: { status: after.status, amount }, reason: input.note });
     await notifyUsers(tx, [r.requestedById], { type: 'INVOICE_REQUEST_DECIDED', subject: input.approve ? 'Request approve ho gayi' : 'Request reject ho gayi', body: input.note, recordType: 'InvoiceRequest', recordId: id, sender: actor });

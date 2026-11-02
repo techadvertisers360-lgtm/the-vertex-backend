@@ -4,6 +4,7 @@ import { MONEY_METHODS } from '../../lib/paymentMethods';
 import { clinicDateStr } from '../../lib/time';
 import { idParam, route } from '../../middleware/route';
 import * as desk from './desk';
+import * as extra from './extras';
 import * as fin from './finance';
 import * as money from './money';
 
@@ -39,7 +40,7 @@ opsRouter.post(
 );
 opsRouter.post(
   '/invoice-requests/:id/decide',
-  route({ permission: [MANAGE, OWNER, 'doctor:share'], params: idParam, body: decision.extend({ amountApprovedPaisa: paisa.optional() }) }, async ({ actor, params, body }) => money.decideInvoiceRequest(actor, params.id, body)),
+  route({ permission: [MANAGE, OWNER, 'doctor:share'], params: idParam, body: decision.extend({ amountApprovedPaisa: paisa.optional(), adjustmentPaisa: z.number().int().min(-100_000_000_000).max(100_000_000_000).optional() }) }, async ({ actor, params, body }) => money.decideInvoiceRequest(actor, params.id, body)),
 );
 
 // Cash handover
@@ -97,9 +98,9 @@ opsRouter.put(
     async ({ actor, params, body }) => fin.saveStaffProfile(actor, params.id, body),
   ),
 );
-opsRouter.post('/staff/:id/marks', route({ permission: [OWNER, MANAGE], status: 201, params: staffParam, body: z.object({ month, kind: z.enum(['ABSENCE', 'LATE', 'UNIFORM']), note: z.string().max(500).optional() }) }, async ({ actor, params, body }) => fin.addStaffMark(actor, params.id, body)));
+opsRouter.post('/staff/:id/marks', route({ permission: [OWNER, MANAGE], status: 201, params: staffParam, body: z.object({ month, kind: z.enum(['ABSENCE', 'LATE', 'UNIFORM', 'WARNING', 'POINTS']), points: z.number().int().min(1).max(5).optional(), note: z.string().max(500).optional() }) }, async ({ actor, params, body }) => fin.addStaffMark(actor, params.id, body)));
 opsRouter.post('/staff/:id/advance', route({ permission: OWNER, status: 201, params: staffParam, body: z.object({ amountPaisa: positive, note: z.string().max(500).optional() }) }, async ({ actor, params, body }) => fin.giveAdvance(actor, params.id, body)));
-opsRouter.post('/staff/:id/pay', route({ permission: OWNER, status: 201, params: staffParam, body: z.object({ month, advanceCutPaisa: paisa }) }, async ({ actor, params, body }) => fin.paySalary(actor, params.id, body)));
+opsRouter.post('/staff/:id/pay', route({ permission: OWNER, status: 201, params: staffParam, body: z.object({ month, advanceCutPaisa: paisa, bonusPaisa: paisa.optional() }) }, async ({ actor, params, body }) => fin.paySalary(actor, params.id, body)));
 
 // Packages
 opsRouter.get('/package-types', route({ permission: [DESK, MANAGE, OWNER] }, async () => ({ items: await desk.listPackageTypes() })));
@@ -117,7 +118,7 @@ opsRouter.post('/packages/:id/use', route({ permission: DESK, status: 201, param
 // Purchase orders
 opsRouter.get('/purchase-orders', route({ permission: [MANAGE, OWNER] }, async () => desk.listPurchaseOrders()));
 opsRouter.post('/purchase-orders', route({ permission: MANAGE, status: 201, body: z.object({ vendorId: id, lines: z.array(z.object({ itemId: id.optional(), name: z.string().max(120).optional(), quantity: z.number().int().min(1) })).max(100) }) }, async ({ actor, body }) => desk.createPurchaseOrder(actor, body)));
-opsRouter.post('/purchase-orders/:id/decide', route({ permission: MANAGE, params: idParam, body: z.object({ action: z.enum(['RECEIVED', 'CANCELLED']), vendorBillNo: z.string().max(60).optional(), received: z.array(z.object({ lineId: id, quantity: z.number().int().min(0) })).optional() }) }, async ({ actor, params, body }) => desk.decidePurchaseOrder(actor, params.id, body)));
+opsRouter.post('/purchase-orders/:id/decide', route({ permission: MANAGE, params: idParam, body: z.object({ action: z.enum(['RECEIVED', 'CANCELLED']), vendorBillNo: z.string().max(60).optional(), received: z.array(z.object({ lineId: id, quantity: z.number().int().min(0), costPaisa: paisa.optional(), expiryDate: isoDate.optional() })).optional() }) }, async ({ actor, params, body }) => desk.decidePurchaseOrder(actor, params.id, body)));
 
 // Office purchases
 opsRouter.get('/office-purchases', route({ permission: ['office:purchase', MANAGE, OWNER, DESK] }, async ({ actor }) => desk.listOfficePurchases(actor)));
@@ -146,6 +147,26 @@ opsRouter.get('/kits/for-procedure', route({ permission: 'assistant:tasks', quer
 opsRouter.get('/room-holds', route({ permission: [MANAGE, OWNER] }, async () => desk.listRoomHolds()));
 opsRouter.post('/room-holds', route({ permission: MANAGE, status: 201, body: z.object({ roomId: id, startAt: z.string().max(40), minutes: z.number().int().min(10).max(600), purpose: z.string().trim().min(2).max(100) }) }, async ({ actor, body }) => desk.holdRoom(actor, body)));
 opsRouter.post('/room-holds/:id/cancel', route({ permission: MANAGE, params: idParam }, async ({ actor, params }) => desk.releaseRoomHold(actor, params.id)));
+
+// Vendor payment requests
+opsRouter.get('/vendor-payments', route({ permission: [MANAGE, OWNER] }, async () => extra.listVendorPayments()));
+opsRouter.post('/vendor-payments', route({ permission: MANAGE, status: 201, body: z.object({ vendorId: id, amountPaisa: positive, note: z.string().max(500) }) }, async ({ actor, body }) => extra.requestVendorPayment(actor, body)));
+opsRouter.post('/vendor-payments/:id/decide', route({ permission: OWNER, params: idParam, body: decision }, async ({ actor, params, body }) => extra.decideVendorPayment(actor, params.id, body)));
+opsRouter.post('/vendor-payments/:id/record', route({ permission: [MANAGE, OWNER], params: idParam, body: z.object({ method: z.enum(MONEY_METHODS), reference: z.string().max(100).optional(), bankAccountId: id.optional() }) }, async ({ actor, params, body }) => extra.recordVendorPayment(actor, params.id, body)));
+
+// Messages
+opsRouter.post('/invoices/:id/payment-message', route({ permission: DESK, params: idParam }, async ({ actor, params }) => extra.sendPaymentMessage(actor, params.id)));
+opsRouter.post('/staff/:id/send-login', route({ permission: OWNER, params: staffParam }, async ({ actor, params }) => extra.sendLoginMessage(actor, params.id)));
+
+// Lowest price, departments
+opsRouter.get('/products', route({ permission: OWNER }, async () => extra.listProducts()));
+opsRouter.put('/products/:id/floor-price', route({ permission: OWNER, params: idParam, body: z.object({ floorPaisa: paisa.nullable() }) }, async ({ actor, params, body }) => extra.setFloorPrice(actor, params.id, body.floorPaisa)));
+opsRouter.get('/departments', route({ permission: [MANAGE, OWNER] }, async () => extra.listDepartments()));
+opsRouter.put('/departments/doctors/:id', route({ permission: [MANAGE, OWNER], params: idParam, body: z.object({ departments: z.array(z.string().max(60)).max(20) }) }, async ({ actor, params, body }) => extra.setDoctorDepartments(actor, params.id, body.departments)));
+opsRouter.put('/departments/services/:id', route({ permission: [MANAGE, OWNER], params: idParam, body: z.object({ department: z.string().max(60).nullable() }) }, async ({ actor, params, body }) => extra.setServiceDepartment(actor, params.id, body.department)));
+
+// Patient feedback by person
+opsRouter.get('/feedback-report', route({ permission: [OWNER, MANAGE], query: monthQuery }, async ({ query }) => extra.feedbackReport(query.month ?? thisMonth())));
 
 // Campaign performance
 opsRouter.get('/campaigns', route({ permission: [OWNER, 'marketing:dashboard'], query: monthQuery }, async ({ query }) => desk.campaignPerformance(query.month ?? thisMonth())));

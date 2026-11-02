@@ -482,6 +482,8 @@ model DoctorProfile {
   id            String   @id @default(cuid())
   userId        String   @unique
   specialty     String?
+  /// Departments this doctor works in; empty means every service (D-090).
+  departments   Json?
   /// Consultation room the Manager assigned to this Doctor (D-049): bookings use it first when it is free.
   defaultRoomId String?
   createdAt     DateTime @default(now())
@@ -697,6 +699,8 @@ model Service {
   defaultPricePaisa BigInt?
   /// Procedure / service list columns (D-060): from the developer's CSV or added by Reception.
   category          String?
+  /// Used to offer only the services of a doctor's departments (D-090).
+  department        String?
   source            String?
   note              String?         @db.Text
   active            Boolean         @default(true)
@@ -1214,6 +1218,8 @@ model ProcedureTask {
   assignedAt              DateTime?
   acceptedAt              DateTime?
   consentAttachmentId     String?
+  /// Patient agreed to photos and videos being used; null where it was not asked (D-090).
+  mediaConsent            Boolean?
   consentAt               DateTime?
   beforePhotoAttachmentId String?
   beforePhotoSkipped      Boolean       @default(false)
@@ -1549,6 +1555,8 @@ model StockItem {
   kind              StockKind @default(PROCEDURE)
   /// Pharmacy selling price per base unit (D-048); procedure products carry cost on their batches instead.
   salePricePaisa    BigInt?
+  /// Lowest price a pharmacy product may sell at; null means no limit (D-090).
+  floorPricePaisa   BigInt?
   preferredVendorId String?
   /// Procedure catalogue fields from the developer's CSV import (D-063); all optional.
   code              String?   @unique @db.VarChar(64)
@@ -1754,6 +1762,8 @@ model Feedback {
   doctorRating  Int?
   staffRating   Int?
   clinicRating  Int?
+  receptionRating Int?
+  managerRating   Int?
   suggestion    String?   @db.Text
   submittedAt   DateTime?
   createdAt     DateTime  @default(now())
@@ -2002,6 +2012,8 @@ enum StaffMarkKind {
   ABSENCE
   LATE
   UNIFORM
+  WARNING
+  POINTS
 }
 
 enum PackageKind {
@@ -2032,6 +2044,8 @@ model InvoiceRequest {
   amountNeededPaisa   BigInt?
   amountAskedPaisa    BigInt?
   amountApprovedPaisa BigInt?
+  /// Bill correction: what the approval changed the total by (+ or -).
+  adjustmentPaisa     BigInt?
   note                String             @db.Text
   status              OpsStatus          @default(PENDING)
   decidedById         String?
@@ -2159,6 +2173,8 @@ model StaffMark {
   userId      String
   month       String        @db.VarChar(7)
   kind        StaffMarkKind
+  /// 1 to 5, for kind POINTS.
+  points      Int?
   note        String?       @db.Text
   createdById String
   createdAt   DateTime      @default(now())
@@ -2190,6 +2206,7 @@ model SalarySlip {
   extraAbsences         Int
   absenceDeductionPaisa BigInt
   advanceCutPaisa       BigInt
+  bonusPaisa            BigInt   @default(0)
   netPaisa              BigInt
   paidById              String
   paidAt                DateTime @default(now())
@@ -2319,6 +2336,23 @@ model SavedReport {
 
   @@index([kind, date])
   @@map("saved_reports")
+}
+
+model VendorPaymentRequest {
+  id                String    @id @default(cuid())
+  vendorId          String
+  amountPaisa       BigInt
+  note              String    @db.Text
+  status            OpsStatus @default(PENDING)
+  requestedById     String
+  decidedById       String?
+  decisionNote      String?   @db.Text
+  decidedAt         DateTime?
+  supplierPaymentId String?
+  createdAt         DateTime  @default(now())
+
+  @@index([status, createdAt])
+  @@map("vendor_payment_requests")
 }
 
 model ServiceKitItem {

@@ -2,7 +2,23 @@
 ALTER TABLE `attachments` MODIFY `route` ENUM('consentForm', 'prescriptionPhoto', 'beforePhoto', 'afterPhoto', 'itemsUsedEvidence', 'roomCleanPhoto', 'roomChecklistPhoto', 'machineIssuePhoto', 'damagePhoto', 'adCreative', 'requestAttachment', 'complaintAttachment', 'vendorInvoice', 'labReport', 'officeBill') NOT NULL;
 
 -- AlterTable
+ALTER TABLE `doctor_profiles` ADD COLUMN `departments` JSON NULL;
+
+-- AlterTable
+ALTER TABLE `feedback` ADD COLUMN `managerRating` INTEGER NULL,
+    ADD COLUMN `receptionRating` INTEGER NULL;
+
+-- AlterTable
+ALTER TABLE `procedure_tasks` ADD COLUMN `mediaConsent` BOOLEAN NULL;
+
+-- AlterTable
 ALTER TABLE `room_reservations` ADD COLUMN `purpose` VARCHAR(191) NULL;
+
+-- AlterTable
+ALTER TABLE `services` ADD COLUMN `department` VARCHAR(191) NULL;
+
+-- AlterTable
+ALTER TABLE `stock_items` ADD COLUMN `floorPricePaisa` BIGINT NULL;
 
 -- CreateTable
 CREATE TABLE `invoice_requests` (
@@ -13,6 +29,7 @@ CREATE TABLE `invoice_requests` (
     `amountNeededPaisa` BIGINT NULL,
     `amountAskedPaisa` BIGINT NULL,
     `amountApprovedPaisa` BIGINT NULL,
+    `adjustmentPaisa` BIGINT NULL,
     `note` TEXT NOT NULL,
     `status` ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'PENDING',
     `decidedById` VARCHAR(191) NULL,
@@ -144,7 +161,8 @@ CREATE TABLE `staff_marks` (
     `id` VARCHAR(191) NOT NULL,
     `userId` VARCHAR(191) NOT NULL,
     `month` VARCHAR(7) NOT NULL,
-    `kind` ENUM('ABSENCE', 'LATE', 'UNIFORM') NOT NULL,
+    `kind` ENUM('ABSENCE', 'LATE', 'UNIFORM', 'WARNING', 'POINTS') NOT NULL,
+    `points` INTEGER NULL,
     `note` TEXT NULL,
     `createdById` VARCHAR(191) NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -177,6 +195,7 @@ CREATE TABLE `salary_slips` (
     `extraAbsences` INTEGER NOT NULL,
     `absenceDeductionPaisa` BIGINT NOT NULL,
     `advanceCutPaisa` BIGINT NOT NULL,
+    `bonusPaisa` BIGINT NOT NULL DEFAULT 0,
     `netPaisa` BIGINT NOT NULL,
     `paidById` VARCHAR(191) NOT NULL,
     `paidAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -310,6 +329,24 @@ CREATE TABLE `saved_reports` (
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     INDEX `saved_reports_kind_date_idx`(`kind`, `date`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `vendor_payment_requests` (
+    `id` VARCHAR(191) NOT NULL,
+    `vendorId` VARCHAR(191) NOT NULL,
+    `amountPaisa` BIGINT NOT NULL,
+    `note` TEXT NOT NULL,
+    `status` ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'PENDING',
+    `requestedById` VARCHAR(191) NOT NULL,
+    `decidedById` VARCHAR(191) NULL,
+    `decisionNote` TEXT NULL,
+    `decidedAt` DATETIME(3) NULL,
+    `supplierPaymentId` VARCHAR(191) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    INDEX `vendor_payment_requests_status_createdAt_idx`(`status`, `createdAt`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

@@ -365,11 +365,11 @@ export async function acceptProcedure(actor: Actor, taskId: string) {
 }
 
 /** Consent gate: the signed consent must be uploaded to this task (spec §4). */
-export async function recordConsent(actor: Actor, taskId: string, attachmentId: string) {
+export async function recordConsent(actor: Actor, taskId: string, attachmentId: string, mediaConsent?: boolean) {
   return withTask(actor, taskId, async (tx, t) => {
     await requireAttachment(tx, t.id, attachmentId, 'consentForm');
-    const r = await advance(tx, t, 'CONSENT', { consentAttachmentId: attachmentId, consentAt: new Date() });
-    await audit(tx, actor, { action: 'CONSENT_UPLOADED', recordType: 'ProcedureTask', recordId: t.id, after: { attachmentId } });
+    const r = await advance(tx, t, 'CONSENT', { consentAttachmentId: attachmentId, consentAt: new Date(), mediaConsent: mediaConsent ?? null });
+    await audit(tx, actor, { action: 'CONSENT_UPLOADED', recordType: 'ProcedureTask', recordId: t.id, after: { attachmentId, mediaConsent: mediaConsent ?? null } });
     return r;
   });
 }

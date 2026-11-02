@@ -172,7 +172,7 @@ receptionRouter.post(
     {
       permission: 'reception:feedback',
       params: idParam,
-      body: z.object({ skip: z.boolean().optional(), doctorRating: rating.optional(), staffRating: rating.optional(), clinicRating: rating.optional(), suggestion: z.string().max(2000).optional() }),
+      body: z.object({ skip: z.boolean().optional(), doctorRating: rating.optional(), staffRating: rating.optional(), clinicRating: rating.optional(), receptionRating: rating.optional(), managerRating: rating.optional(), suggestion: z.string().max(2000).optional() }),
     },
     async ({ actor, params, body }) => svc.saveFeedback(actor, params.id, body),
   ),

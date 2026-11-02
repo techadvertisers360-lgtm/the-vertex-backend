@@ -7,6 +7,7 @@ import { audit, type Actor } from '../../services/audit';
 import { getSetting } from '../../services/settings';
 import { notifyRoles, notifyUsers } from '../../services/notifications';
 import { createDirectInvoice, type PaymentInput } from '../invoices/service';
+import { addStock } from '../reception/stock';
 import { monthBounds } from './finance';
 
 /** Clinic operations from the client's demo (D-089). */
@@ -145,7 +146,20 @@ export async function listPurchaseOrders() {
   return { items: rows.map((r) => ({ ...r, vendor: vendors.find((v) => v.id === r.vendorId) ?? null, createdBy: who(r.createdById), decidedBy: who(r.decidedById) })), vendors: allVendors, stockItems: allItems };
 }
 
-export async function decidePurchaseOrder(actor: Actor, id: string, input: { action: 'RECEIVED' | 'CANCELLED'; vendorBillNo?: string; received?: { lineId: string; quantity: number }[] }) {
+export async function decidePurchaseOrder(actor: Actor, id: string, input: { action: 'RECEIVED' | 'CANCELLED'; vendorBillNo?: string; received?: { lineId: string; quantity: number; costPaisa?: number; expiryDate?: string }[] }) {
+  // Goods go to the same stock-in queue as Reception's, where the Manager verifies them (D-090). The key makes a retry safe.
+  if (input.action === 'RECEIVED') {
+    const po = await prisma.purchaseOrder.findUnique({ where: { id }, include: { lines: true } });
+    if (po?.status === 'OPEN') {
+      const vendor = await prisma.vendor.findUnique({ where: { id: po.vendorId }, select: { name: true } });
+      for (const r of input.received ?? []) {
+        const line = po.lines.find((l) => l.id === r.lineId);
+        if (!line || r.quantity <= 0) continue;
+        const item = line.itemId ? await prisma.stockItem.findUnique({ where: { id: line.itemId }, select: { kind: true, salePricePaisa: true } }) : null;
+        await addStock(actor, { kind: item?.kind ?? 'PROCEDURE', name: line.name, quantity: r.quantity, pricePaisa: item?.kind === 'PHARMACY' ? Number(item.salePricePaisa ?? 0n) : (r.costPaisa ?? 0), costPaisa: r.costPaisa, expiryDate: r.expiryDate, distributor: vendor?.name }, `po:${line.id}`);
+      }
+    }
+  }
   return prisma.$transaction(async (tx) => {
     const po = await tx.purchaseOrder.findUnique({ where: { id }, include: { lines: true } });
     if (!po) throw new NotFoundError('Purchase order');

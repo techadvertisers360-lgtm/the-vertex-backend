@@ -73,7 +73,9 @@ export async function createSale(actor: Actor, input: CounterSaleInput, idempote
       const total = (wanted.get(item.id) ?? 0) + l.quantity;
       if (total > available && !allowNegative) throw new ValidationError(`${item.name}: sirf ${available} ${item.baseUnit} stock mein hai.`, { itemId: item.id, available });
       wanted.set(item.id, total);
-      priced.push({ input: l, item, amt: pharmacyAmounts(BigInt(l.unitPricePaisa), l.quantity, l.discount) });
+      const amt = pharmacyAmounts(BigInt(l.unitPricePaisa), l.quantity, l.discount);
+      if (item.floorPricePaisa !== null && amt.net < item.floorPricePaisa * BigInt(l.quantity)) throw new ValidationError(`${item.name} ki lowest allowed price se kam nahi bech sakte.`);
+      priced.push({ input: l, item, amt });
     }
     const subtotal = priced.reduce((s, p) => s + p.amt.gross, 0n);
     const discount = priced.reduce((s, p) => s + p.amt.discount, 0n);

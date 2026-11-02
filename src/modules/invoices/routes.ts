@@ -171,6 +171,7 @@ invoicesRouter.put(
 );
 
 async function currentSettings() {
+  const taxCardBasisPoints = await getSetting('invoice.taxCardBasisPoints');
   const [numberPrefix, numberFormat, taxEnabled, taxBasisPoints, clinicName, logoDataUrl] = await Promise.all([
     getSetting('invoice.numberPrefix'),
     getSetting('invoice.numberFormat'),
@@ -179,7 +180,7 @@ async function currentSettings() {
     getSetting('clinic.name'),
     getSetting('clinic.logoDataUrl'),
   ]);
-  return { numberPrefix, numberFormat, taxEnabled, taxBasisPoints, clinicName, logoDataUrl, numberExample: renderInvoiceNumber(numberFormat, { prefix: numberPrefix, year: new Date().getUTCFullYear(), seq: 1 }) };
+  return { numberPrefix, numberFormat, taxEnabled, taxBasisPoints, taxCardBasisPoints, clinicName, logoDataUrl, numberExample: renderInvoiceNumber(numberFormat, { prefix: numberPrefix, year: new Date().getUTCFullYear(), seq: 1 }) };
 }
 
 invoicesRouter.get('/settings', route({ permission: 'invoice:settings' }, async () => currentSettings()));
@@ -194,6 +195,7 @@ invoicesRouter.put(
         numberFormat: z.string().optional(),
         taxEnabled: z.boolean().optional(),
         taxBasisPoints: z.number().int().min(0).max(10_000).optional(),
+        taxCardBasisPoints: z.number().int().min(0).max(10_000).nullable().optional(),
         clinicName: z.string().optional(),
         logoDataUrl: z.string().nullable().optional(),
       }),
@@ -204,6 +206,7 @@ invoicesRouter.put(
         ['invoice.numberFormat', body.numberFormat],
         ['invoice.taxEnabled', body.taxEnabled],
         ['invoice.taxBasisPoints', body.taxBasisPoints],
+        ['invoice.taxCardBasisPoints', body.taxCardBasisPoints],
         ['clinic.name', body.clinicName],
         ['clinic.logoDataUrl', body.logoDataUrl],
       ] as const;

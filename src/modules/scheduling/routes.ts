@@ -27,10 +27,14 @@ schedulingRouter.get(
 
 schedulingRouter.get(
   '/services',
-  route({ permission: PERM }, async () => ({
-    // Prices are not exposed here (booking does not need them).
-    items: await prisma.service.findMany({ where: { active: true }, select: { id: true, name: true, type: true, durationMin: true }, orderBy: { name: 'asc' } }),
-  })),
+  route({ permission: PERM, query: z.object({ doctorId: z.string().max(64).optional() }) }, async ({ query }) => {
+    // Prices are not exposed here (booking does not need them). A doctor with departments is offered only theirs (D-090).
+    const profile = query.doctorId ? await prisma.doctorProfile.findUnique({ where: { userId: query.doctorId }, select: { departments: true } }) : null;
+    const departments = (profile?.departments as string[] | null) ?? [];
+    return {
+      items: await prisma.service.findMany({ where: { active: true, ...(departments.length ? { OR: [{ department: null }, { department: { in: departments } }] } : {}) }, select: { id: true, name: true, type: true, durationMin: true }, orderBy: { name: 'asc' } }),
+    };
+  }),
 );
 
 schedulingRouter.get(

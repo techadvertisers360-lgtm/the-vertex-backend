@@ -6,6 +6,7 @@ import { ACCESS_COOKIE, verifyAccessToken } from '../auth/tokens';
 import { ACCOUNT_DISABLED_MSG } from '../auth/service';
 import type { Actor } from '../services/audit';
 import { OUTSIDE_MSG, requestAllowed } from '../services/geofence';
+import { getSetting } from '../services/settings';
 
 export interface AuthUser {
   id: string;
@@ -46,11 +47,15 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
  * check itself, the signed-in profile and the developer's geofence settings stay reachable so nobody is locked out.
  */
 const GEOFENCE_OPEN = ['/api/me', '/api/geofence', '/api/developer/geofence'];
+const OUTSIDE_OPEN = ['/api/ops/chat', '/api/requests', '/api/notifications'];
 
 export async function requireOnSite(req: Request, user: AuthUser): Promise<void> {
   const path = `${req.baseUrl}${req.path}`.replace(/\/+$/, '');
   if (GEOFENCE_OPEN.some((p) => path === p || path.startsWith(`${p}/`))) return;
-  if (!(await requestAllowed({ geofenceRequired: user.geo.required, claimUntil: user.geo.claimUntil }))) throw new AppError(403, 'GEOFENCE_REQUIRED', OUTSIDE_MSG);
+  if (await requestAllowed({ geofenceRequired: user.geo.required, claimUntil: user.geo.claimUntil })) return;
+  // Client demo (D-090), off until set: outside the clinic, Chat and own Requests stay open.
+  if (OUTSIDE_OPEN.some((p) => path === p || path.startsWith(`${p}/`)) && (await getSetting('geofence.outsideLimitedAccess'))) return;
+  throw new AppError(403, 'GEOFENCE_REQUIRED', OUTSIDE_MSG);
 }
 
 /** The only writes allowed while viewing as someone: leaving that mode. */

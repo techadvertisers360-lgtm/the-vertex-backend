@@ -38,6 +38,11 @@ export const SETTING_DEFS = {
   'invoice.taxEnabled': { schema: z.boolean(), default: false, placeholder: true, description: 'Tax on / off for direct invoices (D-084). Accountant to confirm. §26 #8' },
   'invoice.numberFormat': { schema: z.string().min(5).max(40).regex(/\{SEQ\}/, 'Format must contain {SEQ}'), default: '{PREFIX}-{YYYY}-{SEQ}', placeholder: true, description: 'Invoice number format: {PREFIX}, {YYYY}, {YY}, {SEQ} (D-084). §26 #8' },
   'office.purchaseManagerLimitPaisa': { schema: z.number().int().min(0), default: 5_000_000, placeholder: true, description: 'Manager may give up to this much for an office purchase; above it goes to MD and Hamza (client demo, D-089).' },
+  'invoice.taxCardBasisPoints': { schema: z.number().int().min(0).max(10000).nullable(), default: null, placeholder: true, description: 'Tax rate when the first payment is not cash; empty uses the normal rate (client demo, D-090). Accountant to confirm.' },
+  'vendor.requirePaymentApproval': { schema: z.boolean(), default: false, placeholder: true, description: 'On: vendor payments need an approved request from MD or Hamza (client demo, D-090).' },
+  'payment.linkBaseUrl': { schema: z.string().url().max(200).nullable(), default: null, placeholder: true, description: 'Payment page address added to the payment message, as <address>/<invoice number>. Empty: the message gives the bank account (D-090).' },
+  'clinic.wifiName': { schema: z.string().max(60).nullable(), default: null, placeholder: true, description: 'Clinic Wi-Fi name, shown to staff outside the clinic (D-090).' },
+  'geofence.outsideLimitedAccess': { schema: z.boolean(), default: false, placeholder: true, description: 'On: staff outside the clinic can still use Chat and their own Requests (client demo, D-090).' },
   'clinic.name': { schema: z.string().trim().min(1).max(120), default: 'The Vertex Health', placeholder: true, description: 'Clinic name on printed invoices (D-084).' },
   'clinic.logoDataUrl': { schema: z.string().max(300_000).regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/, 'Logo must be a PNG, JPEG or WebP image').nullable(), default: null, placeholder: true, description: 'Clinic logo on printed invoices, stored as a small image (D-084).' },
   'notify.quietHoursStart': { schema: hhmm.nullable(), default: null, placeholder: true, description: 'Patient message quiet hours start (null = none). §26 #9' },
@@ -75,7 +80,7 @@ export const SETTING_DEFS = {
 export type SettingKey = keyof typeof SETTING_DEFS;
 
 /** MD only (D-084): hidden from the general Settings screen of other roles and refused there on the server. */
-export const invoiceSettingKeys: readonly SettingKey[] = ['invoice.numberPrefix', 'invoice.numberFormat', 'invoice.taxEnabled', 'invoice.taxBasisPoints', 'clinic.name', 'clinic.logoDataUrl'];
+export const invoiceSettingKeys: readonly SettingKey[] = ['invoice.numberPrefix', 'invoice.numberFormat', 'invoice.taxEnabled', 'invoice.taxBasisPoints', 'invoice.taxCardBasisPoints', 'clinic.name', 'clinic.logoDataUrl'];
 export type SettingValue<K extends SettingKey> = z.infer<(typeof SETTING_DEFS)[K]['schema']>;
 
 const cache = new Map<string, { v: unknown; at: number }>();

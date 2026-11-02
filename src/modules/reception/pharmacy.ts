@@ -74,6 +74,7 @@ export async function addLine(actor: Actor, invoiceId: string, input: PharmacyLi
       throw new ValidationError(`${item.name}: sirf ${available} ${item.baseUnit} stock mein hai.`, { itemId: item.id, available });
     }
     const amt = pharmacyAmounts(BigInt(input.unitPricePaisa), input.quantity, input.discount);
+    if (item.floorPricePaisa !== null && amt.net < item.floorPricePaisa * BigInt(input.quantity)) throw new ValidationError(`${item.name} ki lowest allowed price se kam nahi bech sakte.`);
     const line = await tx.invoiceLine.create({
       data: {
         invoiceId,

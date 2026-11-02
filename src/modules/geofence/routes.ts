@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ValidationError } from '../../lib/errors';
 import { toJsonSafe } from '../../lib/misc';
 import { check, getConfig, CLAIM_TTL_MS } from '../../services/geofence';
+import { getSetting } from '../../services/settings';
 
 /**
  * Clinic location check (D-062), for every signed-in user — reachable even without an on-site claim. The person
@@ -17,8 +18,9 @@ const holder = (req: Request) => ({ userId: req.user!.impersonator?.id ?? req.us
 geofenceRouter.get('/status', async (req, res) => {
   const cfg = await getConfig();
   const required = cfg.enabled && req.user!.geo.required;
+  const [limitedOutside, wifiName] = await Promise.all([getSetting('geofence.outsideLimitedAccess'), getSetting('clinic.wifiName')]);
   const claimUntil = req.user!.geo.claimUntil && req.user!.geo.claimUntil > new Date() ? req.user!.geo.claimUntil : null;
-  res.json(toJsonSafe({ required, claimUntil, recheckMs: RECHECK_MS, claimTtlMs: CLAIM_TTL_MS }));
+  res.json(toJsonSafe({ required, claimUntil, recheckMs: RECHECK_MS, claimTtlMs: CLAIM_TTL_MS, limitedOutside, wifiName }));
 });
 
 const checkBody = z.object({

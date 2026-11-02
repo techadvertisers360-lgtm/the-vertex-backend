@@ -1,5 +1,6 @@
 import { logger } from '../lib/misc';
 import { runCallbackReminders } from './callbacks';
+import { runMonthEndNotice } from '../modules/ops/finance';
 import { runInstallmentReminders } from '../services/installments';
 import { runCleanAlerts, runConsentAlerts } from './procedureSla';
 import { runAutoSendToReception } from '../modules/procedures/service';
@@ -20,6 +21,7 @@ const WATCHERS: { name: string; run: (now: Date) => Promise<number> }[] = [
   { name: 'callbackReminders', run: runCallbackReminders },
   { name: 'installmentReminders', run: runInstallmentReminders },
   { name: 'consentSla', run: runConsentAlerts },
+  { name: 'monthEndNotice', run: runMonthEndNotice },
   { name: 'roomCleanSla', run: runCleanAlerts },
   { name: 'autoSendToReception', run: runAutoSendToReception },
   { name: 'officeRounds', run: runOfficeRounds },
