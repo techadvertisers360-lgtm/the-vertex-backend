@@ -37,6 +37,7 @@ export const SETTING_DEFS = {
   'invoice.taxBasisPoints': { schema: z.number().int().min(0).max(10000), default: 0, placeholder: true, description: 'Tax rate in basis points (0 = no tax). §26 #8' },
   'invoice.taxEnabled': { schema: z.boolean(), default: false, placeholder: true, description: 'Tax on / off for direct invoices (D-084). Accountant to confirm. §26 #8' },
   'invoice.numberFormat': { schema: z.string().min(5).max(40).regex(/\{SEQ\}/, 'Format must contain {SEQ}'), default: '{PREFIX}-{YYYY}-{SEQ}', placeholder: true, description: 'Invoice number format: {PREFIX}, {YYYY}, {YY}, {SEQ} (D-084). §26 #8' },
+  'office.purchaseManagerLimitPaisa': { schema: z.number().int().min(0), default: 5_000_000, placeholder: true, description: 'Manager may give up to this much for an office purchase; above it goes to MD and Hamza (client demo, D-089).' },
   'clinic.name': { schema: z.string().trim().min(1).max(120), default: 'The Vertex Health', placeholder: true, description: 'Clinic name on printed invoices (D-084).' },
   'clinic.logoDataUrl': { schema: z.string().max(300_000).regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/, 'Logo must be a PNG, JPEG or WebP image').nullable(), default: null, placeholder: true, description: 'Clinic logo on printed invoices, stored as a small image (D-084).' },
   'notify.quietHoursStart': { schema: hhmm.nullable(), default: null, placeholder: true, description: 'Patient message quiet hours start (null = none). §26 #9' },

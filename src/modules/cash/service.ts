@@ -1,4 +1,5 @@
 import { prisma } from '../../lib/prisma';
+import { toJsonSafe } from '../../lib/misc';
 import { ConflictError, ValidationError } from '../../lib/errors';
 import { addDaysStr, clinicDateStr, clinicDayBounds, dateOnly, dateOnlyStr } from '../../lib/time';
 import { audit, type Actor } from '../../services/audit';
@@ -110,6 +111,8 @@ export async function closeDay(actor: Actor, input: { date: string; countedCashP
         managerId: actor.id!,
       },
     });
+    // A copy of the day's figures, saved for Documents (client demo, D-089).
+    await tx.savedReport.create({ data: { kind: 'CASH_CLOSING', date: dateOnly(input.date), title: `Cash closing ${input.date}`, payload: toJsonSafe({ collections: s.collections, cash: s.cash, advances: s.advances, discountsPaisa: s.discountsPaisa, countedPaisa: counted, variancePaisa: variance, notes: input.notes?.trim() || null }) as object, createdById: actor.id! } });
     await audit(tx, actor, { action: 'CASH_CLOSED', recordType: 'CashClosing', recordId: c.id, after: { date: input.date, expected: s.cash.expectedPaisa, counted, variance }, reason: input.notes });
     return c;
   });

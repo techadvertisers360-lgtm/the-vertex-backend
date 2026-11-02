@@ -37,6 +37,8 @@ export const UPLOAD_RULES: Record<UploadRoute, RouteRule> = {
     maxFileSize: '8MB',
     kinds: ['image', 'pdf'],
   },
+  labReport: { isPrivate: true, uploaders: ['RECEPTIONIST', 'MANAGER', 'DOCTOR'], recordTypes: ['Patient'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
+  officeBill: { isPrivate: true, uploaders: ['RECEPTIONIST', 'MANAGER', 'OFFICE_BOY', 'MD', 'MARKETING_DIRECTOR'], recordTypes: ['OfficePurchase'], maxFileSize: '8MB', kinds: ['image', 'pdf'] },
   complaintAttachment: {
     isPrivate: true,
     uploaders: ['LEAD_MEMBER', 'RECEPTIONIST', 'ASSISTANT', 'OFFICE_BOY', 'MANAGER', 'MD', 'MARKETING_DIRECTOR', 'MARKETING_LEAD', 'DOCTOR'],
@@ -92,6 +94,14 @@ export async function authorizeUpload(actor: Actor, route: UploadRoute, target: 
       const r = await db.adRequest.findUnique({ where: { id: recordId }, select: { requesterId: true } });
       const marketing = actor.role === 'MARKETING_LEAD' || actor.role === 'MARKETING_DIRECTOR';
       if (!r || (!marketing && r.requesterId !== actor.id)) deny(recordType, recordId, 'upload:ad_request_party');
+      return;
+    }
+    case 'Patient': {
+      if (!(await db.patient.findUnique({ where: { id: recordId }, select: { id: true } }))) deny(recordType, recordId, 'upload:patient_exists');
+      return;
+    }
+    case 'OfficePurchase': {
+      if (!(await db.officePurchase.findUnique({ where: { id: recordId }, select: { id: true } }))) deny(recordType, recordId, 'upload:office_purchase_exists');
       return;
     }
     case 'GoodsReceipt': {
@@ -199,6 +209,16 @@ export async function authorizeRead(actor: Actor, att: Attachment, db: Db = pris
       }
       return no('invoice_scope');
     }
+    case 'Patient': {
+      // Lab reports: staff who see the patient's history; a Doctor only for their own patient (spec §4 lock 7).
+      if (r === 'RECEPTIONIST' || r === 'MANAGER' || r === 'MD') return;
+      if (r === 'DOCTOR' && (await doctorCanSeePatient(actor.id, id, db))) return;
+      return no('patient_scope');
+    }
+    case 'OfficePurchase':
+      if (r === 'RECEPTIONIST' || r === 'MANAGER' || r === 'MD' || r === 'MARKETING_DIRECTOR') return;
+      if (att.uploadedById === actor.id) return;
+      return no('office_purchase_scope');
     case 'RoomAssignment':
     case 'RoomChecklistReport':
       // Assistant cannot preview a submitted report (spec §12). MD/Hamza have report access (spec §20).

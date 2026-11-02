@@ -78,6 +78,13 @@ export const PERMISSIONS = [
   'invoice:export_all', // every invoice as Excel / CSV
   'invoice:settings', // invoice Settings, Payment Modes, Invoice Categories
   'invoice:audit', // invoice audit history
+  // clinic operations from the client's demo (D-089)
+  'ops:desk', // Reception and Manager: part payment and correction requests, cash handover, sale returns, packages, documents
+  'ops:manage', // Manager and MD: decide those, purchase orders, kits, room holds, clinic now
+  'finance:owner', // MD and Hamza Zafar: expenses, profit and loss, payroll, doctor ledger, costs, data check
+  'doctor:share', // Doctor: own share of the bill, no cost fields
+  'office:purchase', // Office Boy and Manager: ask for office purchases
+  'chat:use',
   'messages:log', // WhatsApp message log, retry, opt-out (spec §20)
   // MD
   'md:dashboard',
@@ -94,7 +101,7 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
-const SHARED: Permission[] = ['notifications:own', 'attendance:own', 'requests:own', 'files:read'];
+const SHARED: Permission[] = ['notifications:own', 'attendance:own', 'requests:own', 'files:read', 'chat:use'];
 
 /** Invoice permissions by level. Moving a permission between these lists is all it takes to change who can do it. */
 const INVOICE_DESK: Permission[] = ['invoice:view', 'invoice:create', 'invoice:pay', 'invoice:advance', 'invoice:print', 'invoice:view_discount'];
@@ -116,6 +123,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'patients:search',
     'patients:create',
     'patients:history',
+    'ops:desk',
     'appointments:book',
     'appointments:read',
     'appointments:reschedule_request',
@@ -138,11 +146,12 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'doctor:history_request',
     'doctor:plan',
     'doctor:aftercare',
+    'doctor:share',
     'availability:own',
     'availability:read',
   ],
   ASSISTANT: [...SHARED, 'assistant:tasks', 'assistant:rooms', 'stock:demand_create'],
-  OFFICE_BOY: [...SHARED, 'officeboy:rounds', 'stock:demand_create'],
+  OFFICE_BOY: [...SHARED, 'officeboy:rounds', 'stock:demand_create', 'office:purchase'],
   MANAGER: [
     ...SHARED,
     'manager:dashboard',
@@ -154,6 +163,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'requests:inbox',
     'patients:search',
     'patients:records',
+    'ops:desk',
+    'ops:manage',
+    'office:purchase',
     'bank:manage',
     'appointments:book',
     'appointments:read',
@@ -179,6 +191,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'md:approvals',
     'requests:inbox',
     'patients:records',
+    'ops:manage',
+    'finance:owner',
     'bank:manage',
     'reports:all',
     'stock:approve_md',
@@ -193,6 +207,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   ],
   MARKETING_DIRECTOR: [
     ...SHARED,
+    'finance:owner',
     'leads:admin',
     'leads:reports',
     'marketing:dashboard',
@@ -234,6 +249,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'appointments', label: 'Appointments', path: '/lead/appointments', permission: 'appointments:read' },
     { key: 'connection', label: 'Connection Booking', path: '/lead/connection', permission: 'appointments:book' },
     { key: 'requests', label: 'Requests', path: '/lead/requests', permission: 'requests:own' },
+    { key: 'chat', label: 'Chat', path: '/lead/chat', permission: 'chat:use' },
     { key: 'performance', label: 'My Performance', path: '/lead/performance', permission: 'leads:own' },
   ],
   RECEPTIONIST: [
@@ -246,6 +262,13 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'upcoming', label: 'Upcoming Procedures', path: '/reception/upcoming', permission: 'reception:assign_procedure' },
     { key: 'billing', label: 'Billing', path: '/reception/billing', permission: 'reception:billing' },
     { key: 'invoices', label: 'Invoices', path: '/reception/invoices', permission: 'invoice:view' },
+    { key: 'plans', label: 'Treatment Plans', path: '/reception/plans', permission: 'ops:desk' },
+    { key: 'ops-money', label: 'Requests & Returns', path: '/reception/requests', permission: 'ops:desk' },
+    { key: 'handover', label: 'Cash Handover', path: '/reception/handover', permission: 'ops:desk' },
+    { key: 'packages', label: 'Packages', path: '/reception/packages', permission: 'ops:desk' },
+    { key: 'office-purchases', label: 'Office Purchases', path: '/reception/office-purchases', permission: 'ops:desk' },
+    { key: 'documents', label: 'Documents', path: '/reception/documents', permission: 'ops:desk' },
+    { key: 'chat', label: 'Chat', path: '/reception/chat', permission: 'chat:use' },
     { key: 'counter-sale', label: 'Counter Sale (Pharmacy)', path: '/reception/counter-sale', permission: 'reception:billing' },
     { key: 'stock', label: 'Stock & batches', path: '/reception/stock', permission: 'stock:reception' },
     { key: 'services', label: 'Procedures & Services', path: '/reception/services', permission: 'services:reception' },
@@ -258,6 +281,9 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'patients', label: 'My Patients', path: '/doctor/patients', permission: 'doctor:history_own' },
     { key: 'history-requests', label: 'History Requests', path: '/doctor/history-requests', permission: 'doctor:history_request' },
     { key: 'availability', label: 'Leave & Availability', path: '/doctor/availability', permission: 'availability:own' },
+    { key: 'share', label: 'My Share', path: '/doctor/share', permission: 'doctor:share' },
+    { key: 'requests', label: 'Part Payment Requests', path: '/doctor/requests', permission: 'doctor:share' },
+    { key: 'chat', label: 'Chat', path: '/doctor/chat', permission: 'chat:use' },
     { key: 'aftercare', label: 'Aftercare', path: '/doctor/aftercare', permission: 'doctor:aftercare' },
   ],
   ASSISTANT: [
@@ -265,11 +291,14 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'rooms', label: 'My Rooms', path: '/assistant/rooms', permission: 'assistant:rooms' },
     { key: 'demands', label: 'Stock Demand', path: '/assistant/demands', permission: 'stock:demand_create' },
     { key: 'staff', label: 'Staff Actions', path: '/assistant/staff', permission: 'attendance:own' },
+    { key: 'chat', label: 'Chat', path: '/assistant/chat', permission: 'chat:use' },
   ],
   OFFICE_BOY: [
     { key: 'duties', label: 'My Duties', path: '/office', permission: 'officeboy:rounds' },
     { key: 'demands', label: 'Stock Demand', path: '/office/demands', permission: 'stock:demand_create' },
     { key: 'staff', label: 'Staff Actions', path: '/office/staff', permission: 'attendance:own' },
+    { key: 'purchases', label: 'Things I Need', path: '/office/purchases', permission: 'office:purchase' },
+    { key: 'chat', label: 'Chat', path: '/office/chat', permission: 'chat:use' },
   ],
   MANAGER: [
     { key: 'dashboard', label: 'Dashboard', path: '/manager', permission: 'manager:dashboard' },
@@ -283,6 +312,16 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'approvals', label: 'Approvals', path: '/manager/approvals', permission: 'manager:approvals' },
     { key: 'stock', label: 'Stock & Vendors', path: '/manager/stock', permission: 'stock:manage' },
     { key: 'invoices', label: 'Invoices', path: '/manager/invoices', permission: 'invoice:view' },
+    { key: 'clinic-now', label: 'Clinic Now', path: '/manager/clinic-now', permission: 'ops:manage' },
+    { key: 'plans', label: 'Treatment Plans', path: '/manager/plans', permission: 'ops:desk' },
+    { key: 'ops-money', label: 'Requests & Returns', path: '/manager/requests-returns', permission: 'ops:manage' },
+    { key: 'handover', label: 'Cash Handover', path: '/manager/handover', permission: 'ops:desk' },
+    { key: 'packages', label: 'Packages', path: '/manager/packages', permission: 'ops:desk' },
+    { key: 'orders', label: 'Purchase Orders', path: '/manager/orders', permission: 'ops:manage' },
+    { key: 'office-purchases', label: 'Office Purchases', path: '/manager/office-purchases', permission: 'ops:manage' },
+    { key: 'kits', label: 'Kits & Room Holds', path: '/manager/kits', permission: 'ops:manage' },
+    { key: 'documents', label: 'Documents', path: '/manager/documents', permission: 'ops:desk' },
+    { key: 'chat', label: 'Chat', path: '/manager/chat', permission: 'chat:use' },
     { key: 'cash', label: 'Cash Closing', path: '/manager/cash', permission: 'cash:closing' },
     { key: 'bank-accounts', label: 'Bank Accounts', path: '/manager/bank-accounts', permission: 'bank:manage' },
     { key: 'messages', label: 'Message Log', path: '/manager/messages', permission: 'messages:log' },
@@ -295,6 +334,14 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
     { key: 'approvals', label: 'Approval Center', path: '/md/approvals', permission: 'md:approvals' },
     { key: 'escalations', label: 'Complaints & Escalations', path: '/md/escalations', permission: 'requests:inbox' },
     { key: 'invoices', label: 'Invoices', path: '/md/invoices', permission: 'invoice:view' },
+    { key: 'clinic-now', label: 'Clinic Now', path: '/md/clinic-now', permission: 'ops:manage' },
+    { key: 'finance', label: 'Finance', path: '/md/finance', permission: 'finance:owner' },
+    { key: 'plans', label: 'Treatment Plans', path: '/md/plans', permission: 'finance:owner' },
+    { key: 'ops-money', label: 'Requests & Returns', path: '/md/requests-returns', permission: 'ops:manage' },
+    { key: 'packages', label: 'Packages', path: '/md/packages', permission: 'finance:owner' },
+    { key: 'office-purchases', label: 'Office Purchases', path: '/md/office-purchases', permission: 'ops:manage' },
+    { key: 'documents', label: 'Documents', path: '/md/documents', permission: 'finance:owner' },
+    { key: 'chat', label: 'Chat', path: '/md/chat', permission: 'chat:use' },
     { key: 'reports', label: 'Reports', path: '/md/reports', permission: 'reports:all' },
     { key: 'bank-accounts', label: 'Bank Accounts', path: '/md/bank-accounts', permission: 'bank:manage' },
     { key: 'lead-admin', label: 'Lead Team Admin', path: '/md/lead-admin', permission: 'leads:admin' },
@@ -303,6 +350,8 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   ],
   MARKETING_DIRECTOR: [
     { key: 'dashboard', label: 'Dashboard', path: '/marketing/hamza', permission: 'marketing:dashboard' },
+    { key: 'finance', label: 'Finance', path: '/marketing/hamza/finance', permission: 'finance:owner' },
+    { key: 'chat', label: 'Chat', path: '/marketing/hamza/chat', permission: 'chat:use' },
     { key: 'members', label: 'Lead Team Members', path: '/marketing/hamza/members', permission: 'leads:admin' },
     { key: 'sheets', label: 'Meta Sheets', path: '/marketing/hamza/sheets', permission: 'leads:admin' },
     { key: 'performance', label: 'Performance', path: '/marketing/hamza/performance', permission: 'leads:reports' },
@@ -312,6 +361,7 @@ export const NAV_MODULES: Record<Role, NavModule[]> = {
   ],
   MARKETING_LEAD: [
     { key: 'dashboard', label: 'Dashboard', path: '/marketing/muaz', permission: 'marketing:dashboard' },
+    { key: 'chat', label: 'Chat', path: '/marketing/muaz/chat', permission: 'chat:use' },
     { key: 'requests', label: 'Ad Requests', path: '/marketing/muaz/requests', permission: 'marketing:ad_requests' },
     { key: 'offers', label: 'Creatives & Offers', path: '/marketing/muaz/offers', permission: 'marketing:offers' },
     { key: 'performance', label: 'Performance', path: '/marketing/muaz/performance', permission: 'leads:reports' },

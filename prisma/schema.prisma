@@ -369,6 +369,8 @@ enum UploadRoute {
   requestAttachment
   complaintAttachment
   vendorInvoice
+  labReport
+  officeBill
 }
 
 // ───────────────────────────── Identity & auth ─────────────────────────────
@@ -843,6 +845,8 @@ model RescheduleHistory {
 model RoomReservation {
   id              String            @id @default(cuid())
   roomId          String
+  /// Set on a room held for something other than a patient, such as a video shoot (D-089).
+  purpose         String?
   appointmentId   String?
   procedureTaskId String?
   startAt         DateTime
@@ -1972,4 +1976,370 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+// ───────────────────────────── Client demo: clinic operations (D-089) ─────────────────────────────
+
+enum OpsStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum InvoiceRequestType {
+  PART_PAYMENT
+  BILL_CORRECTION
+}
+
+enum ExpenseSource {
+  OWNER
+  RECEPTION_DRAWER
+  MANAGER
+  BANK
+}
+
+enum StaffMarkKind {
+  ABSENCE
+  LATE
+  UNIFORM
+}
+
+enum PackageKind {
+  PACKAGE
+  MEMBERSHIP
+}
+
+enum PurchaseOrderStatus {
+  OPEN
+  RECEIVED
+  CANCELLED
+}
+
+enum OfficePurchaseStatus {
+  PENDING
+  WITH_OWNERS
+  CASH_GIVEN
+  SETTLED
+  REJECTED
+}
+
+/// Reception asks: the patient can pay only part now, or a bill needs correcting. Doctor / Manager / MD decide.
+model InvoiceRequest {
+  id                  String             @id @default(cuid())
+  type                InvoiceRequestType
+  invoiceId           String
+  requestedById       String
+  amountNeededPaisa   BigInt?
+  amountAskedPaisa    BigInt?
+  amountApprovedPaisa BigInt?
+  note                String             @db.Text
+  status              OpsStatus          @default(PENDING)
+  decidedById         String?
+  decisionNote        String?            @db.Text
+  decidedAt           DateTime?
+  createdAt           DateTime           @default(now())
+
+  @@index([status, createdAt])
+  @@index([invoiceId])
+  @@map("invoice_requests")
+}
+
+/// Cash handed to someone when the day closes or during it. It does not change what the clinic holds.
+model CashHandover {
+  id              String    @id @default(cuid())
+  date            DateTime  @db.Date
+  amountPaisa     BigInt
+  leftAtDeskPaisa BigInt?
+  fromId          String
+  toId            String
+  note            String?   @db.Text
+  receivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([date])
+  @@index([toId, receivedAt])
+  @@map("cash_handovers")
+}
+
+/// A pharmacy product returned by a patient. Nothing moves until a different person approves.
+model SaleReturn {
+  id            String        @id @default(cuid())
+  number        String        @unique
+  invoiceId     String
+  invoiceLineId String
+  quantity      Int
+  restock       Boolean
+  refundPaisa   BigInt
+  method        PaymentMethod
+  bankAccountId String?
+  reference     String?
+  reason        String        @db.Text
+  status        OpsStatus     @default(PENDING)
+  requestedById String
+  decidedById   String?
+  decisionNote  String?       @db.Text
+  decidedAt     DateTime?
+  paymentId     String?
+  createdAt     DateTime      @default(now())
+
+  @@index([status, createdAt])
+  @@index([invoiceLineId])
+  @@map("sale_returns")
+}
+
+model DoctorShareRule {
+  doctorId          String   @id
+  ownConsultBp      Int      @default(0)
+  ownProcedureBp    Int      @default(0)
+  clinicConsultBp   Int      @default(0)
+  clinicProcedureBp Int      @default(0)
+  fixedCostPaisa    BigInt   @default(0)
+  updatedById       String
+  updatedAt         DateTime @updatedAt
+
+  @@map("doctor_share_rules")
+}
+
+/// A patient the doctor brought in; visits with them use the doctor's "own patient" percentages.
+model DoctorOwnPatient {
+  id          String   @id @default(cuid())
+  doctorId    String
+  patientId   String
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@unique([doctorId, patientId])
+  @@map("doctor_own_patients")
+}
+
+model DoctorPayout {
+  id          String   @id @default(cuid())
+  doctorId    String
+  amountPaisa BigInt
+  method      String
+  reference   String?
+  note        String?  @db.Text
+  paidById    String
+  paidAt      DateTime @default(now())
+
+  @@index([doctorId, paidAt])
+  @@map("doctor_payouts")
+}
+
+model Expense {
+  id          String        @id @default(cuid())
+  date        DateTime      @db.Date
+  category    String
+  description String
+  amountPaisa BigInt
+  paidFrom    ExpenseSource
+  createdById String
+  createdAt   DateTime      @default(now())
+
+  @@index([date])
+  @@map("expenses")
+}
+
+/// HR details kept apart from the login, so salary is never on a user query by accident.
+model StaffProfile {
+  userId           String    @id
+  salaryPaisa      BigInt    @default(0)
+  workingDays      Int       @default(24)
+  startDate        DateTime? @db.Date
+  emergencyContact String?
+  personalEmail    String?
+  updatedById      String
+  updatedAt        DateTime  @updatedAt
+
+  @@map("staff_profiles")
+}
+
+model StaffMark {
+  id          String        @id @default(cuid())
+  userId      String
+  month       String        @db.VarChar(7)
+  kind        StaffMarkKind
+  note        String?       @db.Text
+  createdById String
+  createdAt   DateTime      @default(now())
+
+  @@index([userId, month])
+  @@map("staff_marks")
+}
+
+/// Salary advance ledger: + given, - recovered. The balance is the sum.
+model SalaryAdvance {
+  id          String   @id @default(cuid())
+  userId      String
+  amountPaisa BigInt
+  note        String?  @db.Text
+  slipId      String?
+  actorId     String
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("salary_advances")
+}
+
+model SalarySlip {
+  id                    String   @id @default(cuid())
+  number                String   @unique
+  userId                String
+  month                 String   @db.VarChar(7)
+  salaryPaisa           BigInt
+  extraAbsences         Int
+  absenceDeductionPaisa BigInt
+  advanceCutPaisa       BigInt
+  netPaisa              BigInt
+  paidById              String
+  paidAt                DateTime @default(now())
+
+  @@unique([userId, month])
+  @@map("salary_slips")
+}
+
+model PackageType {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  kind        PackageKind @default(PACKAGE)
+  sessions    Int
+  pricePaisa  BigInt
+  validDays   Int?
+  active      Boolean     @default(true)
+  createdById String
+  createdAt   DateTime    @default(now())
+
+  @@map("package_types")
+}
+
+model PackageSale {
+  id         String    @id @default(cuid())
+  number     String    @unique
+  typeId     String
+  patientId  String
+  invoiceId  String    @unique
+  name       String
+  sessions   Int
+  pricePaisa BigInt
+  expiresAt  DateTime?
+  soldById   String
+  createdAt  DateTime  @default(now())
+
+  uses PackageSessionUse[]
+
+  @@index([patientId])
+  @@map("package_sales")
+}
+
+model PackageSessionUse {
+  id       String   @id @default(cuid())
+  saleId   String
+  usedById String
+  note     String?  @db.Text
+  usedAt   DateTime @default(now())
+
+  sale PackageSale @relation(fields: [saleId], references: [id])
+
+  @@index([saleId])
+  @@map("package_session_uses")
+}
+
+model PurchaseOrder {
+  id           String              @id @default(cuid())
+  number       String              @unique
+  vendorId     String
+  status       PurchaseOrderStatus @default(OPEN)
+  vendorBillNo String?
+  createdById  String
+  decidedById  String?
+  decidedAt    DateTime?
+  createdAt    DateTime            @default(now())
+
+  lines PurchaseOrderLine[]
+
+  @@index([status, createdAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id          String  @id @default(cuid())
+  orderId     String
+  itemId      String?
+  name        String
+  quantity    Int
+  receivedQty Int?
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@map("purchase_order_lines")
+}
+
+model OfficePurchase {
+  id               String               @id @default(cuid())
+  requestedById    String
+  items            Json
+  estimatePaisa    BigInt
+  status           OfficePurchaseStatus @default(PENDING)
+  budgetPaisa      BigInt?
+  cashFrom         ExpenseSource?
+  decidedById      String?
+  decidedAt        DateTime?
+  decisionNote     String?              @db.Text
+  billTotalPaisa   BigInt?
+  changePaisa      BigInt?
+  billAttachmentId String?
+  settledById      String?
+  settledAt        DateTime?
+  createdAt        DateTime             @default(now())
+
+  @@index([status, createdAt])
+  @@map("office_purchases")
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  room      String   @db.VarChar(40)
+  senderId  String
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([room, createdAt])
+  @@map("chat_messages")
+}
+
+model SavedReport {
+  id          String   @id @default(cuid())
+  kind        String
+  date        DateTime @db.Date
+  title       String
+  payload     Json
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([kind, date])
+  @@map("saved_reports")
+}
+
+model ServiceKitItem {
+  id        String @id @default(cuid())
+  serviceId String
+  itemId    String
+  quantity  Int
+
+  @@unique([serviceId, itemId])
+  @@map("service_kit_items")
+}
+
+/// Marketing spend per campaign, by month, entered by hand.
+model CampaignSpend {
+  id          String   @id @default(cuid())
+  campaign    String
+  month       String   @db.VarChar(7)
+  spendPaisa  BigInt
+  updatedById String
+  updatedAt   DateTime @updatedAt
+
+  @@unique([campaign, month])
+  @@map("campaign_spends")
 }

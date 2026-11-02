@@ -28,6 +28,7 @@ import { cronRouter, realtimeRouter } from './modules/platform/routes';
 import { developerRouter } from './modules/developer/routes';
 import { patientRecordsRouter } from './modules/patients/routes';
 import { bankAccountsRouter } from './modules/cash/routes';
+import { opsRouter } from './modules/ops/routes';
 import { geofenceRouter } from './modules/geofence/routes';
 import { invoicesRouter } from './modules/invoices/routes';
 import { relayAfterResponse } from './realtime/afterResponse';
@@ -63,6 +64,7 @@ export const API_MOUNTS: [string, Router][] = [
   ['/inventory', inventoryRouter],
   ['/cash', cashRouter],
   ['/bank-accounts', bankAccountsRouter],
+  ['/ops', opsRouter],
   ['/md', mdRouter],
   ['/lead-admin', leadAdminRouter],
   ['/offers', offersRouter],

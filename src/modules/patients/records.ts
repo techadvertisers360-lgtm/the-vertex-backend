@@ -56,7 +56,7 @@ export async function listPatients(q: { q?: string; cursor?: string; limit: numb
   };
 }
 
-const DOCUMENT_ROUTES = ['prescriptionPhoto', 'consentForm', 'beforePhoto', 'afterPhoto', 'itemsUsedEvidence'] as const;
+const DOCUMENT_ROUTES = ['prescriptionPhoto', 'consentForm', 'beforePhoto', 'afterPhoto', 'itemsUsedEvidence', 'labReport'] as const;
 
 export async function patientRecord(actor: Actor, patientId: string) {
   const patient = await prisma.patient.findUnique({
