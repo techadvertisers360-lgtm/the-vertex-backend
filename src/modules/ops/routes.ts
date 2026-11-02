@@ -139,7 +139,7 @@ opsRouter.get('/data-check', route({ permission: OWNER }, async () => desk.dataC
 // Standard kits
 opsRouter.get('/kits', route({ permission: [MANAGE, OWNER] }, async () => desk.listKits()));
 opsRouter.put('/kits', route({ permission: [MANAGE, OWNER], body: z.object({ serviceId: id, itemId: id, quantity: z.number().int().min(1) }) }, async ({ actor, body }) => desk.saveKitItem(actor, body)));
-opsRouter.delete('/kits/:id', route({ permission: [MANAGE, OWNER], params: idParam }, async ({ actor, params }) => desk.removeKitItem(actor, params.id)));
+opsRouter.post('/kits/:id/remove', route({ permission: [MANAGE, OWNER], params: idParam }, async ({ actor, params }) => desk.removeKitItem(actor, params.id)));
 opsRouter.get('/kits/for-procedure', route({ permission: 'assistant:tasks', query: z.object({ name: z.string().max(200) }) }, async ({ query }) => desk.kitForProcedure(query.name)));
 
 // Room held for a video shoot

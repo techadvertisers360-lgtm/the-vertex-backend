@@ -193,6 +193,7 @@ export async function patientRecord(actor: Actor, patientId: string) {
         OR: [
           { recordType: 'ProcedureTask', recordId: { in: taskIds } },
           { recordType: 'Invoice', recordId: { in: invoices.map((i) => i.id) } },
+          { recordType: 'Patient', recordId: { in: patientIds } },
         ],
         route: { in: [...DOCUMENT_ROUTES] },
       },
@@ -331,6 +332,7 @@ export async function patientRecord(actor: Actor, patientId: string) {
     otherProcedures: tasks.filter((t) => !t.appointmentId || !apptIds.includes(t.appointmentId)).map(procedure),
     // Pharmacy counter sales and any invoice not tied to a visit.
     otherInvoices: invoices.filter((i) => !i.appointmentId || !apptIds.includes(i.appointmentId)).map(invoiceView),
+    labReports: attachments.filter((a) => a.recordType === 'Patient'),
   };
 }
 
