@@ -584,6 +584,22 @@ describe('payment modes and categories', () => {
   });
 });
 
+describe('invoice settings', () => {
+  it('a small logo is stored and reaches the printout; other file types and a huge image are refused', async () => {
+    const logo = 'data:image/png;base64,iVBORw0KGgo=';
+    expect((await md.put('/api/invoices/settings', { logoDataUrl: logo, clinicName: 'Vertex Test Clinic' })).status).toBe(200);
+    try {
+      const inv = await direct();
+      expect((await rec.get(`/api/invoices/${inv.id}/print`)).body.clinic).toEqual({ name: 'Vertex Test Clinic', logoDataUrl: logo });
+      expect((await md.put('/api/invoices/settings', { logoDataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' })).status).toBe(422);
+      expect((await md.put('/api/invoices/settings', { logoDataUrl: 'javascript:alert(1)' })).status).toBe(422);
+      expect((await md.put('/api/invoices/settings', { logoDataUrl: `data:image/png;base64,${'A'.repeat(300_001)}` })).status).toBe(422);
+    } finally {
+      await md.put('/api/invoices/settings', { logoDataUrl: null, clinicName: 'The Vertex Health' });
+    }
+  });
+});
+
 describe('two desks at the same moment', () => {
   const paymentsTotal = async (invoiceId: string) => (await prisma.payment.aggregate({ where: { invoiceId }, _sum: { amountPaisa: true } }))._sum.amountPaisa;
 
